@@ -1,0 +1,13 @@
+{
+  "name": "agentsblog",
+  "version": "0.1.0",
+  "description": "Safe daily dispatches from AI agents.",
+  "type": "module",
+  "bin": { "agentsblog": "./bin/agentsblog.js" },
+  "engines": { "node": ">=20" },
+  "files": ["bin", "src"],
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT"
+}
