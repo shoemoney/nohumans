@@ -42,7 +42,8 @@ function ctxFor({ config = {}, client, flags = {}, yes = false, json = false } =
   };
 }
 
-function writeDraft(ctx, { report = null, ...draft } = {}) {
+// `agentsblog draft` always writes a disclosure report next to the draft, so a clean one is the default.
+function writeDraft(ctx, { report = { warnings: [] }, ...draft } = {}) {
   const files = fmt.draftFiles(TODAY, ctx);
   mkdirSync(files.dir, { recursive: true });
   writeFileSync(
@@ -65,6 +66,7 @@ function fakeClient(responses) {
       return next;
     },
     postStatus: async (id) => ({ id, status: 'held' }),
+    updatePost: async (id, payload) => (calls.push({ update: id, payload }), { id }),
     pauseAgent: async (id) => (calls.push({ pause: id }), { ok: true }),
     resumeAgent: async (id) => (calls.push({ resume: id }), { ok: true })
   };
@@ -163,6 +165,43 @@ test('a warned draft needs --yes, and autopublish skips it entirely', async () =
   writeDraft(forced, { report: { warned: true, autopublish_blocked: true } });
   assert.equal(await publish([], forced), 0);
   assert.equal(client.calls.length, 1);
+});
+
+test('a missing disclosure report counts as a warning and fails closed', async () => {
+  const client = fakeClient({ status: 201, body: { id: 'p5' } });
+  const ctx = ctxFor({ client });
+  writeDraft(ctx, { report: null });
+  assert.equal(await publish([], ctx), 1);
+  assert.match(ctx._err.join('\n'), /draft_has_warnings[\s\S]*never scanned/);
+  assert.equal(client.calls.length, 0);
+
+  const auto = ctxFor({ client, flags: { auto: true } });
+  writeDraft(auto, { report: null });
+  assert.equal(await publish([], auto), 0);
+  assert.match(auto._err.join('\n'), /autopublish: skipped/);
+  assert.equal(client.calls.length, 0);
+
+  const forced = ctxFor({ client, yes: true });
+  writeDraft(forced, { report: null });
+  assert.equal(await publish([], forced), 0);
+  assert.equal(client.calls.length, 1);
+});
+
+test('re-publishing an edited draft corrects the existing post instead of creating a second one', async () => {
+  const client = fakeClient({ status: 201, body: { id: 'p1', url: 'https://ada.agentsblog.ai/p1' } });
+  const ctx = ctxFor({ client });
+  writeDraft(ctx);
+  assert.equal(await publish([], ctx), 0);
+
+  ctx.config = ctx._config(); // a second run reads the config the first run wrote
+  writeDraft(ctx, { markdown: `${BODY}\n\nCorrection: the lease was 30s, not 30m.` });
+  assert.equal(await publish([], ctx), 0);
+
+  assert.equal(client.calls.filter((c) => c.key).length, 1); // exactly one create, ever
+  assert.equal(client.calls.at(-1).update, 'p1');
+  assert.match(client.calls.at(-1).payload.markdown, /Correction/);
+  assert.equal(ctx._config().last_publish.post_id, 'p1');
+  assert.equal(ctx._config().last_publish.url, 'https://ada.agentsblog.ai/p1'); // the only record of it survives
 });
 
 test('autopublish never publishes while paused, and never without a manual publish first', async () => {

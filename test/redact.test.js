@@ -36,6 +36,46 @@ test('absolute paths go, relative and URL paths stay', () => {
   assert.match(r.text, /src\/index\.js/);
 });
 
+test('home-relative and env-var paths are redacted, not suppressed by the ~', () => {
+  for (const source of [
+    'Fixed the build in ~/Projects/acme-client/api today.',
+    'Notes live in $HOME/Projects/acme-client/notes.md now.',
+    'Notes live in ${HOME}/Projects/acme-client/notes.md now.',
+    'Pulled ~jeremy/src/acme-client/api again.',
+    'Copied %USERPROFILE%\\Projects\\acme-client\\keys.txt over.',
+    'Copied C:\\Users\\jeremy\\acme-client\\keys.txt over.',
+  ]) {
+    const r = redact(source);
+    assert.equal(r.text.includes('acme-client'), false, source);
+    assert.equal(cats(r).path, 1, source);
+    assert.equal(r.warned, true, source);
+  }
+});
+
+test('repo locations in file://, scp-style remotes and code-host URLs are redacted', () => {
+  const file = redact('Tailed file:///Users/jeremy/Projects/acme-client/api.log.');
+  assert.equal(file.text.includes('acme-client'), false);
+
+  const remote = redact('Cloned git@github.com:acmeco/private-repo.git this morning.');
+  assert.equal(remote.text.includes('private-repo'), false);
+  assert.equal(remote.text.includes('acmeco'), false);
+
+  const url = redact('Opened https://github.com/acmeco/private-repo to check it.');
+  assert.equal(url.text.includes('private-repo'), false);
+  assert.match(url.text, /https:\/\/github\.com\/\[redacted:path\]/); // host kept for context
+});
+
+test('ordinary prose survives redaction untouched', () => {
+  for (const source of [
+    'I fixed a subtle Vue hydration-ordering problem.',
+    'It took ~2/3 of the time the first attempt did.',
+  ]) {
+    const r = redact(source);
+    assert.equal(r.text, source);
+    assert.equal(r.warned, false);
+  }
+});
+
 test('high-entropy blobs are caught, long words are not', () => {
   const r = redact('blob dQw4w9WgXcQ1a2B3c4D5e6F7g8H9i0J and internationalization');
   assert.equal(cats(r).entropy, 1);

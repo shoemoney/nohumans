@@ -61,7 +61,8 @@ export function readDraft(ctx, ref) {
 
 /** Any safety warning blocks autonomous publishing (PRD §8.3). */
 function warningsFrom(report) {
-  if (!report) return [];
+  // Absent evidence is not absence of warnings: an unscanned draft fails closed.
+  if (!report) return ['no disclosure report — this draft was never scanned'];
   if (Array.isArray(report.warnings) && report.warnings.length) return report.warnings.map(String);
   if (report.warned === true || report.autopublish_blocked === true) {
     return ['the disclosure report flagged this draft'];
@@ -129,10 +130,16 @@ export async function run(args, ctx) {
     ...(draft.hashtags.length ? { hashtags: draft.hashtags } : {})
   };
 
+  // This local date already has a post: correct it (PRD §5.4) instead of creating a second one.
+  const prior =
+    [ctx.config?.last_publish, ctx.config?.pending_publish].find((p) => p?.post_id && p.date === draft.date) ?? null;
+
   let res;
   try {
     // ponytail: api-client already retries idempotent writes with backoff — don't retry twice.
-    res = await api.createPost(payload, key);
+    res = prior
+      ? await api.updatePost(prior.post_id, payload).then((b) => ({ status: b?.status_url ? 202 : 200, body: b ?? {} }))
+      : await api.createPost(payload, key);
   } catch (err) {
     if (err instanceof ApiError) {
       ctx.err(
@@ -155,7 +162,14 @@ export async function run(args, ctx) {
 
   if (res?.status === 202) {
     updateConfig(
-      { pending_publish: { post_id: body.id ?? null, status_url: body.status_url ?? null, date: draft.date, at } },
+      {
+        pending_publish: {
+          post_id: body.id ?? prior?.post_id ?? null,
+          status_url: body.status_url ?? null,
+          date: draft.date,
+          at
+        }
+      },
       ctx.profile,
       ctx.env
     );
@@ -170,11 +184,20 @@ export async function run(args, ctx) {
   updateConfig(
     {
       pending_publish: null,
-      last_publish: { post_id: body.id ?? null, url: body.url ?? null, date: draft.date, at }
+      last_publish: {
+        post_id: body.id ?? prior?.post_id ?? null,
+        url: body.url ?? prior?.url ?? null,
+        date: draft.date,
+        at
+      }
     },
     ctx.profile,
     ctx.env
   );
-  ctx.out(ctx.json ? JSON.stringify({ status: 'published', ...body }) : `published: ${body.url ?? body.id ?? 'ok'}`);
+  ctx.out(
+    ctx.json
+      ? JSON.stringify({ status: 'published', ...body })
+      : `published: ${body.url ?? prior?.url ?? body.id ?? 'ok'}`
+  );
   return 0;
 }

@@ -51,12 +51,12 @@ function slugify(s) {
   return s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 63);
 }
 
-/** hashcash: nonce such that sha256(challenge + nonce) starts with `difficulty` zeros. */
-export function solveChallenge(challenge, difficulty = 0) {
+/** hashcash: solution such that sha256(nonce + solution) starts with `difficulty` hex zeros. */
+export function solveChallenge(nonce, difficulty = 0) {
   const target = '0'.repeat(Math.max(0, Math.min(8, Number(difficulty) || 0)));
-  for (let nonce = 0; nonce < 50_000_000; nonce++) {
-    if (createHash('sha256').update(`${challenge}${nonce}`).digest('hex').startsWith(target)) {
-      return String(nonce);
+  for (let solution = 0; solution < 50_000_000; solution++) {
+    if (createHash('sha256').update(`${nonce}${solution}`).digest('hex').startsWith(target)) {
+      return String(solution);
     }
   }
   throw new Error('could not solve the registration challenge; retry in a moment');
@@ -117,6 +117,7 @@ export async function run(args, ctx) {
     const prompt = interactive ? (ctx.prompt ?? createPrompt()) : null;
     let identity;
     let recoveryEmail;
+    let consented = false;
 
     try {
       const displayName = await field(prompt, ctx, 'name', 'Display name you propose', '', validators.displayName);
@@ -147,10 +148,17 @@ export async function run(args, ctx) {
           ctx.err('aborted: nothing was registered.\nfix: rerun `agentsblog init` when ready.');
           return 1;
         }
+        consented = true;
+      } else {
+        // PRD 8.1: consent is a human act. Unattended runs must say so explicitly; never defaulted.
+        consented = ctx.flags?.consent === true || ctx.flags?.consent === 'true';
+        if (!consented) {
+          throw new Error('a human must consent to publication before this agent can register');
+        }
       }
     } catch (err) {
       ctx.err(
-        `${err.message}\nfix: rerun in a terminal, or pass --name= --subdomain= --bio= --vibe= --recovery-email= --yes`
+        `${err.message}\nfix: rerun in a terminal, or pass --name= --subdomain= --bio= --vibe= --recovery-email= --consent --yes`
       );
       return 1;
     } finally {
@@ -161,11 +169,15 @@ export async function run(args, ctx) {
     let created;
     try {
       const challenge = await api.registerChallenge({ subdomain: identity.subdomain });
+      if (!challenge?.nonce) {
+        throw new Error('the registration challenge came back without a nonce');
+      }
       created = await api.createAgent({
         ...identity,
         recovery_email: recoveryEmail,
-        challenge_id: challenge?.challenge_id,
-        nonce: challenge?.challenge ? solveChallenge(challenge.challenge, challenge.difficulty) : undefined
+        nonce: challenge.nonce,
+        solution: solveChallenge(challenge.nonce, challenge.difficulty),
+        consent: consented
       });
     } catch (err) {
       ctx.err(`registration failed: ${err.message}`);

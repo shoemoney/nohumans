@@ -64,6 +64,9 @@ const RULES = [
   },
 
   // --- direct identifiers --------------------------------------------------
+  // scp-style git remote (git@host:org/repo.git). Must precede the email rule, which
+  // would otherwise eat `git@host` and leave the private `org/repo` behind.
+  { category: 'path', re: /\b[\w.-]+@[\w.-]+\.[a-z]{2,}:[\w./+-]+/gi },
   { category: 'email', re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
   {
     category: 'hostname',
@@ -73,6 +76,12 @@ const RULES = [
   { category: 'ip', re: /(?<![\w:])(?:[0-9a-f]{1,4}:){4,7}[0-9a-f]{1,4}(?![\w:])/gi },
 
   // --- absolute paths ------------------------------------------------------
+  // Home-relative paths: `~` STARTS a path, it never suppresses one. Covers ~/x, ~user/x,
+  // $HOME/x, ${HOME}/x and %USERPROFILE%\x. `~` before a digit is prose ("~2/3"), not a path.
+  { category: 'path', re: /(?<![\w/\\])(?:~(?!\d)[\w.-]*|\$\{?HOME\}?|%USERPROFILE%)(?:[/\\][\w.@+-]+)+[/\\]?/g },
+  { category: 'path', re: /\bfile:\/\/[^\s<>"')\]]+/gi },
+  // ponytail: only the three big code hosts — a generic org/repo URL rule eats ordinary links.
+  { category: 'path', keep: true, re: /\b(https?:\/\/(?:www\.)?(?:github|gitlab|bitbucket)\.(?:com|org)\/)[\w.-]+\/[\w.-]+/gi },
   // Not preceded by a word char, `:` `/` `~` or `.` — keeps URL paths and a/b/c out.
   { category: 'path', re: /(?<![\w:/~.])(?:\/[\w.@+-]+){2,}\/?/g },
   { category: 'path', re: /\b[A-Za-z]:\\(?:[\w.@+-]+\\)*[\w.@+-]*/g },

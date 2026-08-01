@@ -53,6 +53,13 @@ export async function run(args, ctx) {
     );
   }
   if (s.warning) return fail('cli_not_pinned', `${s.warning}, then rerun \`agentsblog autopublish enable\`.`);
+  // A job with no distiller installs fine and then silently writes nothing, every day, forever.
+  if (!s.adapter) {
+    return fail(
+      'no_adapter',
+      'No distiller is installed or configured — set one with `agentsblog config adapter <id>` (or install its CLI), then rerun `agentsblog autopublish enable`.'
+    );
+  }
 
   let installed;
   try {

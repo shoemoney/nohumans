@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 import * as integrations from '../src/integrations.js';
 import { run as init } from '../src/commands/init.js';
@@ -19,13 +20,75 @@ function sandbox() {
   return { home, cwd, claude, env: { AGENTSBLOG_HOME: home, HOME: home, CLAUDE_CONFIG_DIR: claude } };
 }
 
+/** Reads a PHP source file that the API owns, so these tests break when the server contract moves. */
+function apiSource(relative) {
+  return readFileSync(new URL(`../../api/${relative}`, import.meta.url), 'utf8');
+}
+
+/** The real proof-of-work difficulty, straight out of the service the API runs. */
+const DIFFICULTY = Number(
+  apiSource('app/Services/RegistrationChallenge.php').match(/DIFFICULTY\s*=\s*(\d+)/)[1]
+);
+
+/** POST /v1/agents validation rules, parsed out of the controller: {field: ['required', 'size:32', ...]}. */
+function serverRules() {
+  const body = apiSource('app/Http/Controllers/Api/RegistrationController.php')
+    .match(/\$request->validate\(\[([\s\S]*?)^\s*\]\);/m)[1];
+  const rules = {};
+  for (const line of body.split('\n')) {
+    const m = line.match(/^\s*'(\w+)'\s*=>\s*\[(.*)\],\s*$/);
+    if (m) rules[m[1]] = [...m[2].matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((q) => q[1]);
+  }
+  return rules;
+}
+
+/** Laravel's rules, as much of them as this payload can trip. Empty array = the server would accept it. */
+function violations(payload, rules) {
+  const problems = [];
+  for (const [field, list] of Object.entries(rules)) {
+    const value = payload[field];
+    const present = value !== undefined && value !== null && value !== '';
+    if (!present) {
+      if (list.includes('required')) problems.push(`${field}: missing but required`);
+      continue;
+    }
+    const text = String(value);
+    for (const rule of list) {
+      const cut = rule.indexOf(':');
+      const key = cut === -1 ? rule : rule.slice(0, cut);
+      const arg = cut === -1 ? '' : rule.slice(cut + 1);
+      if (key === 'accepted' && ![true, 1, '1', 'yes', 'on'].includes(value)) {
+        problems.push(`${field}: consent must be accepted, got ${JSON.stringify(value)}`);
+      }
+      if (key === 'size' && text.length !== Number(arg)) problems.push(`${field}: must be ${arg} chars, got ${text.length}`);
+      if (key === 'max' && text.length > Number(arg)) problems.push(`${field}: longer than ${arg}`);
+      if (key === 'min' && text.length < Number(arg)) problems.push(`${field}: shorter than ${arg}`);
+      if (key === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) problems.push(`${field}: not an email`);
+      if (key === 'regex') {
+        const pattern = arg.slice(arg.indexOf('/') + 1, arg.lastIndexOf('/'));
+        if (!new RegExp(pattern).test(text)) problems.push(`${field}: fails ${arg}`);
+      }
+    }
+  }
+  return problems;
+}
+
+/** 32 hex chars, exactly what bin2hex(random_bytes(16)) hands the CLI. */
+const NONCE = 'a3f19c740b5e26d8a3f19c740b5e26d8';
+
 function fakeApi() {
   const calls = [];
   return {
     calls,
     async registerChallenge(payload) {
       calls.push(['registerChallenge', payload]);
-      return { challenge_id: 'c1', challenge: 'abc', difficulty: 1 };
+      return {
+        nonce: NONCE,
+        algorithm: 'sha256-leading-zeros',
+        difficulty: DIFFICULTY,
+        expires_in: 900,
+        instructions: 'Find any solution string where sha256(nonce + solution) starts with zeros.'
+      };
     },
     async createAgent(payload) {
       calls.push(['createAgent', payload]);
@@ -191,14 +254,58 @@ test('init refuses a bad subdomain and a non-interactive run without flags', asy
   assert.equal(await init([], reserved), 1);
   assert.match(reserved.errors.join('\n'), /reserved/);
 
-  // Unattended run: the flags are the human's confirmation, and they are still validated.
+  // Unattended run: the flags plus an explicit --consent are the human's confirmation, still validated.
   const ok = makeCtx(box, {
     yes: true,
     api: fakeApi(),
-    flags: { name: 'Ada', subdomain: 'ada', bio: 'I count things.', vibe: 'dry', 'recovery-email': 'a@b.co' }
+    flags: {
+      name: 'Ada', subdomain: 'ada', bio: 'I count things.', vibe: 'dry',
+      'recovery-email': 'a@b.co', consent: true
+    }
   });
   assert.equal(await init([], ok), 0);
   assert.equal(readConfig('default', box.env).agent.subdomain, 'ada');
+});
+
+test('unattended init without --consent registers nothing (PRD 8.1)', async () => {
+  const box = sandbox();
+  const api = fakeApi();
+  const ctx = makeCtx(box, {
+    yes: true,
+    api,
+    flags: { name: 'Ada', subdomain: 'ada', bio: 'I count things.', vibe: 'dry', 'recovery-email': 'a@b.co' }
+  });
+
+  assert.equal(await init([], ctx), 1);
+  assert.match(ctx.errors.join('\n'), /consent/);
+  assert.ok(!api.calls.some(([name]) => name === 'createAgent'), 'nothing may register without consent');
+  assert.ok(!existsSync(join(box.home, 'profiles/default/config.json')));
+});
+
+test('init sends exactly what POST /v1/agents validates: solved proof of work + human consent', async () => {
+  const box = sandbox();
+  const api = fakeApi();
+  assert.equal(await init([], makeCtx(box, { api, prompt: fakePrompt(ANSWERS) })), 0);
+
+  const [, payload] = api.calls.find(([name]) => name === 'createAgent');
+  const rules = serverRules();
+
+  // The controller's own rule list must be satisfied by the exact body the CLI sends.
+  assert.ok(Object.keys(rules).length >= 10, 'failed to parse the controller validation rules');
+  assert.deepEqual(violations(payload, rules), []);
+
+  // Nothing invented: every field we send is a field the server validates.
+  assert.deepEqual(Object.keys(payload).filter((k) => !(k in rules)), []);
+
+  // The proof of work must actually solve RegistrationChallenge::verify().
+  assert.ok(
+    createHash('sha256').update(payload.nonce + payload.solution).digest('hex')
+      .startsWith('0'.repeat(DIFFICULTY)),
+    'sha256(nonce + solution) must start with the server difficulty in zeros'
+  );
+
+  // Consent is transmitted, and only because the human confirmed at the prompt.
+  assert.equal(payload.consent, true);
 });
 
 test('config lists with the credential masked and validates what it sets', async () => {

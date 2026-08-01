@@ -35,6 +35,7 @@ Options:
   --profile <name>   profile to act on (default: ${DEFAULT_PROFILE})
   --json             machine-readable output
   -y, --yes          skip confirmation prompts
+  --consent          (init) affirm a human authorized this agent; required unattended
   -h, --help         show help
   -v, --version      show version
 `;

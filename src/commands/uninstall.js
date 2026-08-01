@@ -4,19 +4,28 @@
  */
 
 import { existsSync, rmSync } from 'node:fs';
-import { readConfig } from '../config.js';
+import { sep } from 'node:path';
+import { readConfig, updateConfig } from '../config.js';
 import * as integrations from '../integrations.js';
+import * as schedule from '../schedule.js';
 import { createPrompt } from '../prompt.js';
-import { profileDir } from '../paths.js';
+import { journalDir, profileDir } from '../paths.js';
 
 export async function run(args, ctx) {
   const env = ctx.env ?? process.env;
   const purge = ctx.flags?.purge === true || args.includes('--purge');
   const dir = profileDir(ctx.profile, env);
   const config = readConfig(ctx.profile, env);
-  const summary = { profile: ctx.profile, removed: [], archive: dir, purged: false };
+  // The legacy ~/.agentsblog/journal archive lives outside the profile dir (paths.js),
+  // so --purge must delete it too rather than claim a deletion it did not do.
+  const legacy = journalDir(ctx.profile, env);
+  const targets = [dir, ...(legacy.startsWith(dir + sep) ? [] : [legacy])].filter((p) => existsSync(p));
+  const summary = { profile: ctx.profile, removed: [], archive: dir, purged: false, purged_paths: [] };
 
-  const results = integrations.remove({ env, cwd: ctx.cwd });
+  // The scheduled job is the one integration that keeps publishing on its own; removing
+  // the hook while leaving cron/launchd in place would keep posting after uninstall.
+  const results = [...integrations.remove({ env, cwd: ctx.cwd }), removeSchedule(ctx, config, env)];
+  if (config.autopublish === true) updateConfig({ autopublish: false }, ctx.profile, env);
   summary.removed = results;
   if (!ctx.json) {
     for (const r of results) {
@@ -24,30 +33,54 @@ export async function run(args, ctx) {
     }
   }
 
-  if (purge && existsSync(dir)) {
+  if (purge && targets.length) {
     if (!ctx.yes) {
       const prompt = ctx.prompt ?? (process.stdin.isTTY ? createPrompt() : null);
       if (!prompt) {
-        ctx.err(`refusing to delete ${dir} without confirmation\nfix: rerun with --purge --yes`);
+        ctx.err(`refusing to delete ${targets.join(' and ')} without confirmation\nfix: rerun with --purge --yes`);
         return 1;
       }
       let ok = false;
       try {
-        ok = await prompt.confirm(`Permanently delete the local archive at ${dir}?`, false);
+        ok = await prompt.confirm(`Permanently delete the local archive at ${targets.join(' and ')}?`, false);
       } finally {
         if (!ctx.prompt) prompt.close();
       }
       if (!ok) {
-        ctx.out(`kept ${dir}`);
+        ctx.out(`kept ${targets.join(' and ')}`);
         return finish(ctx, summary, config, dir);
       }
     }
-    rmSync(dir, { recursive: true, force: true });
+    for (const target of targets) {
+      rmSync(target, { recursive: true, force: true });
+      summary.purged_paths.push(target);
+      if (!ctx.json) ctx.out(`deleted ${target}`);
+    }
     summary.purged = true;
-    if (!ctx.json) ctx.out(`deleted ${dir}`);
   }
 
   return finish(ctx, summary, config, dir);
+}
+
+/** @returns {{target: string, path: string, status: string, reason?: string}} */
+function removeSchedule(ctx, config, env) {
+  let s = null;
+  try {
+    s = schedule.spec({ ...ctx, env, config });
+    const res = schedule.uninstall(s, { home: env.HOME, ...(ctx.scheduleOpts ?? {}) });
+    return {
+      target: 'autopublish schedule',
+      path: res.file ?? `crontab: ${s.label}`,
+      status: res.removed ? 'removed' : 'absent'
+    };
+  } catch (err) {
+    return {
+      target: 'autopublish schedule',
+      path: s?.label ?? `ai.agentsblog.${ctx.profile}`,
+      status: 'skipped',
+      reason: `${err.message} — remove the scheduled job manually, it will keep publishing`
+    };
+  }
 }
 
 function finish(ctx, summary, config, dir) {

@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import * as adapters from './adapters/index.js';
 import { pinnedCommand } from './integrations.js';
 import { profileDir } from './paths.js';
 
@@ -21,7 +22,7 @@ export function jitterMinutes(agentId, span = JITTER_SPAN) {
  * @param {import('./cli.js').Ctx} ctx
  * @returns {{profile: string, label: string, hour: number, minute: number,
  *            argv: string[], env: Record<string,string>, log: string,
- *            warning: string|null}}
+ *            adapter: {id: string, exe: string|null}|null, warning: string|null}}
  */
 export function spec(ctx) {
   const agentId = agentKey(ctx);
@@ -39,17 +40,47 @@ export function spec(ctx) {
   const env = { PATH: '/usr/bin:/bin' };
   if (ctx.env?.HOME) env.HOME = ctx.env.HOME;
   if (ctx.env?.AGENTSBLOG_HOME) env.AGENTSBLOG_HOME = ctx.env.AGENTSBLOG_HOME;
+  const adapter = pinAdapter(env, ctx.env ?? {}, ctx.config?.adapter);
   return {
     profile: ctx.profile,
     label: `ai.agentsblog.${ctx.profile}`,
     hour,
     minute: jitterMinutes(agentId),
     argv: [node, cli, 'publish', '--auto', '--profile', ctx.profile],
+    adapter,
     warning,
     env,
     log: join(profileDir(ctx.profile, ctx.env), 'autopublish.log')
   };
 }
+
+/**
+ * Resolve the distiller at enable time and carry through exactly what it needs. A cron or
+ * launchd job inherits almost nothing, so a job with only PATH=/usr/bin:/bin finds no
+ * distiller and no credentials and can never produce a post. Still an allowlist — the
+ * adapter's own `envAllow` rules, never a copy of process.env — and the resolved
+ * executable's directory is pinned ahead of the system path (PRD §13).
+ * @returns {{id: string, exe: string|null}|null}
+ */
+function pinAdapter(env, source, configured) {
+  let adapter = null;
+  try {
+    adapter = (configured ? adapters.get(configured) : adapters.detect(source)[0]) ?? null;
+  } catch {
+    return null; // unknown configured id; `agentsblog config adapter <id>` reports it
+  }
+  if (!adapter) return null;
+  const exe = adapters.which(adapter.bin, source);
+  if (exe) env.PATH = `${dirname(exe)}:${env.PATH}`;
+  env.AGENTSBLOG_ADAPTER = adapter.id; // the job runs this adapter, not whatever is installed later
+  for (const [key, value] of Object.entries(source)) {
+    if (value && (adapter.envAllow ?? []).some((rule) => rule.test(key))) env[key] = value;
+  }
+  return { id: adapter.id, exe };
+}
+
+// Only these are safe to echo; the rest of the carried env is credentials.
+const SHOWN_ENV = new Set(['PATH', 'HOME', 'AGENTSBLOG_HOME', 'AGENTSBLOG_ADAPTER']);
 
 function agentKey(ctx) {
   const a = ctx.config?.agent;
@@ -67,7 +98,8 @@ export function describe(s, platform = process.platform) {
   return [
     `schedule:   daily at ${at} local time (${platform === 'darwin' ? 'launchd' : 'cron'}, jitter derived from your agent id)`,
     `command:    ${s.argv.join(' ')}`,
-    `env:        ${Object.entries(s.env).map(([k, v]) => `${k}=${v}`).join(' ')}`,
+    `distiller:  ${s.adapter ? `${s.adapter.id}${s.adapter.exe ? ` (${s.adapter.exe})` : ''}` : 'none detected — the job cannot write a post until you set one'}`,
+    `env:        ${Object.entries(s.env).map(([k, v]) => `${k}=${SHOWN_ENV.has(k) ? v : '(carried from your environment)'}`).join(' ')}`,
     `log:        ${s.log}`,
     '',
     'safety:     skips thin days, skips any draft with redaction warnings,',
@@ -118,7 +150,10 @@ function currentCrontab(exec) {
 }
 
 function withoutOurs(text, s) {
-  return text.split('\n').filter((l) => l.trim() && !l.includes(marker(s)));
+  // Anchored: `# agentsblog:work` is a prefix of `# agentsblog:work2`, and a substring
+  // match would let one profile delete another profile's job.
+  const m = marker(s);
+  return text.split('\n').filter((l) => l.trim() && !l.trimEnd().endsWith(m));
 }
 
 function installCron(s, opts) {
@@ -182,7 +217,7 @@ function installLaunchd(s, opts) {
   const file = plistPath(s, opts);
   const domain = `gui/${opts.uid ?? process.getuid?.() ?? 501}`;
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, plist(s), { mode: 0o644 });
+  writeFileSync(file, plist(s), { mode: 0o600 }); // it holds adapter credentials
   try { exec('launchctl', ['bootout', `${domain}/${s.label}`]); } catch { /* not loaded */ }
   exec('launchctl', ['bootstrap', domain, file]);
   return { kind: 'launchd', file };
