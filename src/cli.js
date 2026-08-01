@@ -67,7 +67,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const [name, ...rest] = positionals;
 
   if (values.version) return out('agentsblog 0.1.0'), 0;
-  if (!name || values.help && !name) return out(USAGE), name ? 0 : 1;
+  // Asking for help is a success; being invoked with nothing at all is misuse.
+  if (!name) return out(USAGE), values.help ? 0 : 1;
   if (!COMMANDS.includes(name)) {
     err(`unknown command: ${name}\nfix: run one of ${COMMANDS.join(', ')}`);
     return 1;

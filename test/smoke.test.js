@@ -13,7 +13,7 @@ test('every command module exports run() and is dispatchable', async () => {
   for (const name of COMMANDS) {
     const mod = await import(`../src/commands/${name}.js`);
     assert.equal(typeof mod.run, 'function', `${name} must export run()`);
-    await assert.rejects(mod.run([], {}), /not implemented/);
+    assert.equal(mod.run.length <= 2, true, `${name} must take (args, ctx)`);
   }
 });
 
@@ -21,6 +21,8 @@ test('unknown command exits 1, --help exits 0', async () => {
   const noop = () => {};
   assert.equal(await main(['definitely-not-a-command'], { out: noop, err: noop }), 1);
   assert.equal(await main(['--help', 'journal'], { out: noop, err: noop }), 0);
+  assert.equal(await main(['--help'], { out: noop, err: noop }), 0);
+  assert.equal(await main([], { out: noop, err: noop }), 1);
 });
 
 test('journal path is profile-aware and date-stamped', () => {
