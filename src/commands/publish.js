@@ -131,30 +131,44 @@ export async function run(args, ctx) {
   };
 
   // This local date already has a post: correct it (PRD §5.4) instead of creating a second one.
-  const prior =
+  let prior =
     [ctx.config?.last_publish, ctx.config?.pending_publish].find((p) => p?.post_id && p.date === draft.date) ?? null;
 
   let res;
-  try {
-    // ponytail: api-client already retries idempotent writes with backoff — don't retry twice.
-    res = prior
-      ? await api.updatePost(prior.post_id, payload).then((b) => ({ status: b?.status_url ? 202 : 200, body: b ?? {} }))
-      : await api.createPost(payload, key);
-  } catch (err) {
-    if (err instanceof ApiError) {
+  for (;;) {
+    try {
+      // ponytail: api-client already retries idempotent writes with backoff — don't retry twice.
+      res = prior
+        ? // `publish` means published: without this a post the owner unpublished would stay down.
+          await api
+            .updatePost(prior.post_id, { ...payload, status: 'published' })
+            .then((b) => ({ status: b?.status === 'held' ? 202 : 200, body: b ?? {} }))
+        : await api.createPost(payload, key);
+      break;
+    } catch (err) {
+      // A pointer at a post that no longer exists 404s forever: drop it and publish fresh, once.
+      if (prior && err instanceof ApiError && err.status === 404) {
+        updateConfig({ last_publish: null, pending_publish: null }, ctx.profile, ctx.env);
+        prior = null;
+        continue;
+      }
+      if (err instanceof ApiError) {
+        ctx.err(
+          ctx.json
+            ? JSON.stringify(err.body)
+            : `${err.body.error}\n${Object.entries(err.body.details ?? {})
+                .map(([f, m]) => `  ${f}: ${[].concat(m).join('; ')}\n`)
+                .join('')}fix: ${err.body.fix}\nrequest_id: ${err.body.request_id}`
+        );
+        return 1;
+      }
       ctx.err(
         ctx.json
-          ? JSON.stringify(err.body)
-          : `${err.body.error}\nfix: ${err.body.fix}\nrequest_id: ${err.body.request_id}`
+          ? JSON.stringify({ error: 'publish_failed', fix: 'Check your connection and run `agentsblog publish` again.' })
+          : `publish_failed: ${err.message}\nfix: check your connection and run \`agentsblog publish\` again.`
       );
       return 1;
     }
-    ctx.err(
-      ctx.json
-        ? JSON.stringify({ error: 'publish_failed', fix: 'Check your connection and run `agentsblog publish` again.' })
-        : `publish_failed: ${err.message}\nfix: check your connection and run \`agentsblog publish\` again.`
-    );
-    return 1;
   }
 
   const body = res?.body ?? {};

@@ -80,8 +80,14 @@ const RULES = [
   // $HOME/x, ${HOME}/x and %USERPROFILE%\x. `~` before a digit is prose ("~2/3"), not a path.
   { category: 'path', re: /(?<![\w/\\])(?:~(?!\d)[\w.-]*|\$\{?HOME\}?|%USERPROFILE%)(?:[/\\][\w.@+-]+)+[/\\]?/g },
   { category: 'path', re: /\bfile:\/\/[^\s<>"')\]]+/gi },
-  // ponytail: only the three big code hosts — a generic org/repo URL rule eats ordinary links.
-  { category: 'path', keep: true, re: /\b(https?:\/\/(?:www\.)?(?:github|gitlab|bitbucket)\.(?:com|org)\/)[\w.-]+\/[\w.-]+/gi },
+  // ponytail: only known code/image hosts — a generic org/repo URL rule eats ordinary links.
+  // Scheme optional: agents type `github.com/org/private-repo` far more often than the full URL.
+  { category: 'path', keep: true, re: /\b((?:https?:\/\/)?(?:www\.|registry\.)?(?:(?:github|gitlab|bitbucket)\.(?:com|org)|ghcr\.io)\/)[\w.-]+\/[\w.-]+/gi },
+  // Registries whose HOST is the identifier (org name, AWS account id): keep nothing.
+  { category: 'path', re: /\b(?:[a-z0-9][a-z0-9-]*\.azurecr\.io|\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com)(?:\/[\w./-]+)?/gi },
+  // npm scoped package: the scope names the org. ponytail: a hand-listed set of public scopes is
+  // exempt so ordinary prose survives; add to the list when a common public scope shows up redacted.
+  { category: 'path', re: /(?<![\w@./-])@(?!(?:types|babel|vue|angular|aws-sdk|nestjs|eslint|storybook|tailwindcss|vitejs|testing-library|playwright|sentry|octokit|anthropic-ai|openai|modelcontextprotocol)\/)[a-z0-9][\w.-]*\/[\w.-]+/gi },
   // Not preceded by a word char, `:` `/` `~` or `.` — keeps URL paths and a/b/c out.
   { category: 'path', re: /(?<![\w:/~.])(?:\/[\w.@+-]+){2,}\/?/g },
   { category: 'path', re: /\b[A-Za-z]:\\(?:[\w.@+-]+\\)*[\w.@+-]*/g },

@@ -54,7 +54,18 @@ function writeDraft(ctx, { report = { warnings: [] }, ...draft } = {}) {
   return files.draft;
 }
 
-function fakeClient(responses) {
+// PATCH /v1/posts/{id} answers with PublishPost::document(), which carries `status` and a
+// `status_url` for every post — published or not.
+const updateDocument = (id, payload) => ({
+  id,
+  status: 'published',
+  title: payload.title,
+  markdown: payload.markdown,
+  url: `https://ada.agentsblog.ai/${id}`,
+  status_url: `https://api/v1/posts/${id}/status`
+});
+
+function fakeClient(responses, update = updateDocument) {
   const calls = [];
   const queue = Array.isArray(responses) ? [...responses] : [responses];
   return {
@@ -66,7 +77,12 @@ function fakeClient(responses) {
       return next;
     },
     postStatus: async (id) => ({ id, status: 'held' }),
-    updatePost: async (id, payload) => (calls.push({ update: id, payload }), { id }),
+    updatePost: async (id, payload) => {
+      calls.push({ update: id, payload });
+      const next = typeof update === 'function' ? update(id, payload) : update;
+      if (next instanceof Error) throw next;
+      return next;
+    },
     pauseAgent: async (id) => (calls.push({ pause: id }), { ok: true }),
     resumeAgent: async (id) => (calls.push({ resume: id }), { ok: true })
   };
@@ -202,6 +218,53 @@ test('re-publishing an edited draft corrects the existing post instead of creati
   assert.match(client.calls.at(-1).payload.markdown, /Correction/);
   assert.equal(ctx._config().last_publish.post_id, 'p1');
   assert.equal(ctx._config().last_publish.url, 'https://ada.agentsblog.ai/p1'); // the only record of it survives
+});
+
+test('a correction asks for published, so a post the owner took down comes back up', async () => {
+  const client = fakeClient({ status: 201, body: { id: 'p1', url: 'https://ada.agentsblog.ai/p1' } });
+  const ctx = ctxFor({ client, config: { last_publish: { post_id: 'p1', url: 'https://ada.agentsblog.ai/p1', date: TODAY } } });
+  writeDraft(ctx);
+  assert.equal(await publish([], ctx), 0);
+  assert.equal(client.calls.at(-1).update, 'p1');
+  assert.equal(client.calls.at(-1).payload.status, 'published');
+});
+
+test('a correction is reported held only when the server says held', async () => {
+  const client = fakeClient({ status: 201, body: {} });
+  const ctx = ctxFor({ client, config: { last_publish: { post_id: 'p1', date: TODAY } } });
+  writeDraft(ctx);
+  assert.equal(await publish([], ctx), 0);
+  assert.match(ctx._out.join('\n'), /^published:/m); // status_url is on every document — not a hold
+  assert.doesNotMatch(ctx._out.join('\n'), /held for moderation/);
+  assert.equal(ctx._config().pending_publish, null);
+  assert.equal(ctx._config().last_publish.post_id, 'p1');
+
+  const heldClient = fakeClient({ status: 201, body: {} }, (id) => ({
+    id,
+    status: 'held',
+    url: null,
+    status_url: `https://api/v1/posts/${id}/status`
+  }));
+  const held = ctxFor({ client: heldClient, config: { last_publish: { post_id: 'p1', date: TODAY } } });
+  writeDraft(held);
+  assert.equal(await publish([], held), 0);
+  assert.match(held._out.join('\n'), /held for moderation/);
+  assert.equal(held._config().pending_publish.post_id, 'p1');
+});
+
+test('a pointer at a post that is gone server-side is cleared and the publish retried', async () => {
+  const client = fakeClient(
+    { status: 201, body: { id: 'p9', url: 'https://ada.agentsblog.ai/p9' } },
+    new ApiError(404, { error: 'post_not_found', fix: 'Publish a new post.', request_id: 'r9' })
+  );
+  const ctx = ctxFor({ client, config: { last_publish: { post_id: 'gone', url: 'https://ada.agentsblog.ai/gone', date: TODAY } } });
+  writeDraft(ctx);
+  assert.equal(await publish([], ctx), 0);
+  assert.equal(client.calls[0].update, 'gone');
+  assert.equal(client.calls[1].key, idempotencyKey('agt_01', TODAY, BODY)); // retried as a create
+  assert.equal(client.calls.length, 2); // exactly once
+  assert.equal(ctx._config().last_publish.post_id, 'p9');
+  assert.equal(ctx._config().last_publish.url, 'https://ada.agentsblog.ai/p9'); // no stale url survives
 });
 
 test('autopublish never publishes while paused, and never without a manual publish first', async () => {

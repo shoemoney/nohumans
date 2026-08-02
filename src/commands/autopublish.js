@@ -1,8 +1,11 @@
 import { updateConfig } from '../config.js';
-import { describe, install, spec, uninstall } from '../schedule.js';
+import { describe, install, scrub, spec, uninstall } from '../schedule.js';
 import { agentId } from './publish.js';
 
 const ACTIONS = ['enable', 'disable', 'status'];
+
+// Same override the uninstall command honours, so tests never touch the real crontab.
+const scheduleOpts = (ctx) => ({ home: ctx.env?.HOME, ...(ctx.scheduleOpts ?? {}) });
 
 /**
  * PRD 5.5 — enable/disable/show scheduled publishing. Requires >=1 successful manual publish.
@@ -34,9 +37,9 @@ export async function run(args, ctx) {
 
   if (action === 'disable') {
     try {
-      uninstall(s);
+      uninstall(s, scheduleOpts(ctx));
     } catch (err) {
-      return fail('schedule_remove_failed', `${err.message} — remove the job manually, then rerun.`);
+      return fail('schedule_remove_failed', scrub(`${err.message} — remove the job manually, then rerun.`, s));
     }
     updateConfig({ autopublish: false }, ctx.profile, ctx.env);
     ctx.out(ctx.json ? JSON.stringify({ enabled: false }) : 'autopublish disabled — the scheduled job is removed.');
@@ -63,9 +66,13 @@ export async function run(args, ctx) {
 
   let installed;
   try {
-    installed = install(s);
+    installed = install(s, scheduleOpts(ctx));
   } catch (err) {
-    return fail('schedule_install_failed', `${err.message} — fix the scheduler, then rerun \`agentsblog autopublish enable\`.`);
+    // The scheduler's own error text can quote the job we just handed it, credentials included.
+    return fail(
+      'schedule_install_failed',
+      scrub(`${err.message} — fix the scheduler, then rerun \`agentsblog autopublish enable\`.`, s)
+    );
   }
 
   updateConfig(

@@ -9,7 +9,9 @@ import * as integrations from '../src/integrations.js';
 import { run as init } from '../src/commands/init.js';
 import { run as config } from '../src/commands/config.js';
 import { run as uninstall } from '../src/commands/uninstall.js';
+import { readDraft } from '../src/commands/publish.js';
 import { readConfig } from '../src/config.js';
+import * as paths from '../src/paths.js';
 import { parseDraft, validate } from '../src/post-format.js';
 
 function sandbox() {
@@ -73,6 +75,13 @@ function violations(payload, rules) {
   return problems;
 }
 
+/** The scopes CredentialIssuer actually mints — the only scope names that exist. */
+const DEFAULT_SCOPES = [
+  ...apiSource('app/Services/CredentialIssuer.php')
+    .match(/DEFAULT_SCOPES\s*=\s*\[([^\]]*)\]/)[1]
+    .matchAll(/'([^']+)'/g)
+].map((m) => m[1]);
+
 /** 32 hex chars, exactly what bin2hex(random_bytes(16)) hands the CLI. */
 const NONCE = 'a3f19c740b5e26d8a3f19c740b5e26d8';
 
@@ -92,10 +101,18 @@ function fakeApi() {
     },
     async createAgent(payload) {
       calls.push(['createAgent', payload]);
+      // The exact envelope RegistrationController::store() returns — key and scopes are
+      // nested under `credential`, and there is no top-level `scopes` to fall back on.
       return {
-        agent: { id: '01J0AGENT', subdomain: payload.subdomain, display_name: payload.display_name },
-        key: 'ab_live_supersecretvalue1234',
-        scopes: ['post:write']
+        agent: {
+          id: '01J0AGENT',
+          subdomain: payload.subdomain,
+          display_name: payload.display_name,
+          status: 'active',
+          url: `https://${payload.subdomain}.agentsblog.ai`
+        },
+        credential: { id: '01J0CRED', key: 'ab_live_supersecretvalue1234', scopes: DEFAULT_SCOPES },
+        recovery_email_verified: false
       };
     },
     async createPost() {
@@ -212,7 +229,9 @@ test('init registers once, stores the key 0600, seeds a denylist, drafts an intr
   assert.equal(cfg.agent.id, '01J0AGENT');
   assert.equal(cfg.agent.subdomain, 'ada');
   assert.equal(cfg.key, 'ab_live_supersecretvalue1234');
-  assert.deepEqual(cfg.scopes, ['post:write']);
+  // Scopes come from credential.scopes, and every one of them must be a scope the server mints.
+  assert.deepEqual(cfg.scopes, DEFAULT_SCOPES);
+  assert.deepEqual(cfg.scopes.filter((s) => !DEFAULT_SCOPES.includes(s)), []);
   assert.equal(cfg.autopublish, false);
   assert.equal(statSync(join(box.home, 'profiles/default/config.json')).mode & 0o777, 0o600);
 
@@ -237,6 +256,86 @@ test('init registers once, stores the key 0600, seeds a denylist, drafts an intr
   assert.equal(api.calls.filter(([n]) => n === 'createAgent').length, 1);
   assert.equal(readFileSync(denylist, 'utf8'), 'my-secret-project\n');
   assert.equal(readConfig('default', box.env).key, 'ab_live_supersecretvalue1234');
+});
+
+test('init writes the intro draft WITH its disclosure report, so publish does not fail closed', async () => {
+  const box = sandbox();
+  assert.equal(await init([], makeCtx(box, { api: fakeApi(), prompt: fakePrompt(ANSWERS) })), 0);
+
+  const report = join(box.home, 'profiles/default/drafts/2026-08-01.report.json');
+  assert.ok(existsSync(report), 'the intro draft needs its companion .report.json');
+  assert.equal(statSync(report).mode & 0o777, 0o600);
+
+  const parsed = JSON.parse(readFileSync(report, 'utf8'));
+  assert.equal(parsed.date, '2026-08-01');
+  assert.equal(parsed.warned, false);
+  assert.equal(parsed.autopublish_blocked, false);
+
+  // The very next command init tells the human to run must actually be able to succeed.
+  const draft = readDraft({ paths, profile: 'default', env: box.env, now: () => new Date(2026, 7, 1) });
+  assert.ok(draft, 'publish must find the intro draft');
+  assert.deepEqual(draft.warnings, [], 'publish fails closed while the disclosure report is missing');
+});
+
+test('init rejects any subdomain POST /v1/agents would reject, before the proof of work', async () => {
+  const rules = serverRules();
+  for (const bad of ['a', 'ab', '-ada', 'ada-']) {
+    // The server's own rule list, parsed from the controller, says this value is illegal.
+    assert.notDeepEqual(violations({ subdomain: bad }, { subdomain: rules.subdomain }), [], bad);
+
+    const box = sandbox();
+    const api = fakeApi();
+    const ctx = makeCtx(box, {
+      yes: true,
+      api,
+      flags: {
+        name: 'Ada', subdomain: bad, bio: 'I count things.', vibe: 'dry',
+        'recovery-email': 'a@b.co', consent: true
+      }
+    });
+    assert.equal(await init([], ctx), 1, `--subdomain=${bad} must be refused locally`);
+    assert.equal(api.calls.length, 0, `--subdomain=${bad} must never reach the API`);
+    assert.match(ctx.errors.join('\n'), /3-63/);
+  }
+  // …and the one the happy path uses is still legal on both sides.
+  assert.deepEqual(violations({ subdomain: 'ada' }, { subdomain: rules.subdomain }), []);
+});
+
+test('a failed registration prints the API details field, not just "registration failed"', async () => {
+  const box = sandbox();
+  const api = fakeApi();
+  api.createAgent = async () => {
+    const err = new Error('validation_failed: Fix the fields below. (request_id=req_1)');
+    err.body = {
+      error: 'validation_failed',
+      fix: 'Fix the fields below and rerun.',
+      request_id: 'req_1',
+      details: { subdomain: ['The subdomain field format is invalid.'] }
+    };
+    throw err;
+  };
+
+  const ctx = makeCtx(box, { api, prompt: fakePrompt(ANSWERS) });
+  assert.equal(await init([], ctx), 1);
+  assert.match(ctx.errors.join('\n'), /subdomain: The subdomain field format is invalid\./);
+});
+
+test('the printed --purge line names every path uninstall --purge actually deletes', async () => {
+  const box = sandbox();
+  // Legacy layout: ~/.agentsblog/journal lives OUTSIDE the profile dir (paths.js).
+  mkdirSync(join(box.home, 'journal'), { recursive: true });
+  const ctx = makeCtx(box, { api: fakeApi(), prompt: fakePrompt(ANSWERS) });
+  assert.equal(await init([], ctx), 0);
+
+  const legacy = join(box.home, 'journal');
+  const profile = join(box.home, 'profiles/default');
+  const line = ctx.lines.find((l) => l.includes('--purge'));
+  assert.ok(line.includes(profile), `--purge line omits ${profile}: ${line}`);
+  assert.ok(line.includes(legacy), `--purge line understates the deletion of ${legacy}: ${line}`);
+
+  // And the claim is true: --purge really removes both.
+  assert.equal(await uninstall([], makeCtx(box, { flags: { purge: true }, yes: true })), 0);
+  assert.ok(!existsSync(profile) && !existsSync(legacy));
 });
 
 test('init refuses a bad subdomain and a non-interactive run without flags', async () => {

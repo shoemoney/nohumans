@@ -164,7 +164,7 @@ test('journal refuses to follow a symlinked journal file', async () => {
 // --- draft (PRD 5.3 / 8.3) --------------------------------------------------
 
 /** Fake CLI-CORE-LIBS: redaction that swaps one denylisted token, plus a canned distiller. */
-function fakeDeps(markdown, { title = 'Stale locks' } = {}) {
+function fakeDeps(markdown, { title = 'Stale locks', hashtags = ['caching'] } = {}) {
   const redact = (text) => {
     const findings = [];
     const out = text.replace(/Jeremy/g, () => {
@@ -178,7 +178,7 @@ function fakeDeps(markdown, { title = 'Stale locks' } = {}) {
     scanSummary: (r) => ({ categories: Object.fromEntries(r.findings.map((f) => [f.category, f.count])), passes: 1 }),
     detect: () => [{ id: 'fake', argv: ['true'], stdin: () => '' }],
     get: () => ({ id: 'fake', argv: ['true'], stdin: () => '' }),
-    distill: async () => ({ title, markdown, hashtags: ['caching'] })
+    distill: async () => ({ title, markdown, hashtags })
   };
 }
 
@@ -221,6 +221,42 @@ test('draft redacts, rescans, and writes a local draft plus a disclosure report'
   const out = ctx.lines.join('\n');
   assert.match(out, /scan 2 {2}name=1/);
   assert.ok(!/Jeremy/.test(out));
+});
+
+const FAT_JOURNAL =
+  '- 09:00 Spent the morning on stale cache locks and learned why retries kept resurrecting them long after the TTL expired.\n';
+
+test('the second pass redacts the model-authored title, not just the body', async () => {
+  const ctx = makeCtx({ deps: fakeDeps(GOOD, { title: 'Why Jeremy kept the lock alive' }) });
+  await seedJournal(ctx, FAT_JOURNAL);
+
+  assert.equal(await draft([], ctx), 0);
+  const files = fmt.draftFiles('2026-08-01', ctx);
+  const written = fmt.parseDraft(readFileSync(files.draft, 'utf8'));
+  assert.ok(!/Jeremy/.test(written.title), 'a distilled title must be redacted like the body');
+
+  // The body is clean here, so every finding and the warned flag come from the title.
+  const report = JSON.parse(readFileSync(files.report, 'utf8'));
+  assert.deepEqual(report.scans[1].categories, { name: 1 });
+  assert.equal(report.warned, true);
+  assert.equal(report.autopublish_blocked, true);
+});
+
+test('model-authored hashtags are scanned against the denylist and dropped', async () => {
+  const ctx = makeCtx({ deps: fakeDeps(GOOD, { hashtags: ['Jeremy', 'acmemigration', 'caching'] }) });
+  const file = paths.denylistFile(ctx.profile, ctx.env);
+  mkdirSync(join(file, '..'), { recursive: true });
+  writeFileSync(file, '# private\nJeremy\nAcme\n');
+  await seedJournal(ctx, FAT_JOURNAL);
+
+  assert.equal(await draft([], ctx), 0);
+  const files = fmt.draftFiles('2026-08-01', ctx);
+  const written = fmt.parseDraft(readFileSync(files.draft, 'utf8'));
+  assert.deepEqual(written.hashtags, ['caching']);
+
+  const report = JSON.parse(readFileSync(files.report, 'utf8'));
+  assert.equal(report.hashtags_dropped, 2);
+  assert.equal(report.warned, true);
 });
 
 test('draft refuses to write a post that fails PRD 6', async () => {

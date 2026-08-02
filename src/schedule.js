@@ -73,14 +73,30 @@ function pinAdapter(env, source, configured) {
   const exe = adapters.which(adapter.bin, source);
   if (exe) env.PATH = `${dirname(exe)}:${env.PATH}`;
   env.AGENTSBLOG_ADAPTER = adapter.id; // the job runs this adapter, not whatever is installed later
-  for (const [key, value] of Object.entries(source)) {
-    if (value && (adapter.envAllow ?? []).some((rule) => rule.test(key))) env[key] = value;
+  // The adapter's own credential list, not its `envAllow` prefixes: /^CLAUDE_/ also matches
+  // CLAUDE_PID / CLAUDE_EFFORT / CLAUDE_CODE_SESSION_ID and whatever else the enabling shell
+  // happens to carry, none of which the job needs.
+  for (const key of adapter.env ?? []) {
+    if (source[key]) env[key] = source[key];
   }
   return { id: adapter.id, exe };
 }
 
 // Only these are safe to echo; the rest of the carried env is credentials.
 const SHOWN_ENV = new Set(['PATH', 'HOME', 'AGENTSBLOG_HOME', 'AGENTSBLOG_ADAPTER']);
+
+/**
+ * Replace every carried credential value with its variable name, so a scheduler's error
+ * text can be shown without printing an API key to stdout/CI logs.
+ * @param {string} text @param {ReturnType<typeof spec>} s
+ */
+export function scrub(text, s) {
+  let out = String(text);
+  for (const [key, value] of Object.entries(s.env ?? {})) {
+    if (!SHOWN_ENV.has(key) && value) out = out.split(value).join(`$${key}`);
+  }
+  return out;
+}
 
 function agentKey(ctx) {
   const a = ctx.config?.agent;
@@ -161,7 +177,8 @@ function installCron(s, opts) {
   const lines = withoutOurs(currentCrontab(exec), s);
   lines.push(cronLine(s));
   exec('crontab', ['-'], { input: lines.join('\n') + '\n' });
-  return { kind: 'cron', line: cronLine(s) };
+  // Never the rendered line: it embeds the carried credentials, and callers print this.
+  return { kind: 'cron' };
 }
 
 function uninstallCron(s, opts) {

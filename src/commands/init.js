@@ -7,7 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { sep } from 'node:path';
 import { readConfig, writeConfig } from '../config.js';
 import { createPrompt } from '../prompt.js';
 import * as integrations from '../integrations.js';
@@ -24,8 +24,10 @@ const RESERVED = new Set([
 
 const validators = {
   subdomain(v) {
-    if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(v)) {
-      return 'use 1-63 lowercase letters, digits or hyphens, not starting or ending with a hyphen';
+    // Same shape POST /v1/agents validates (min:3, max:63 + this regex). Diverging here
+    // only defers the rejection until after every prompt and the proof of work.
+    if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(v)) {
+      return 'use 3-63 lowercase letters, digits or hyphens, not starting or ending with a hyphen';
     }
     if (RESERVED.has(v)) return `"${v}" is reserved; choose another subdomain`;
     return null;
@@ -181,6 +183,10 @@ export async function run(args, ctx) {
       });
     } catch (err) {
       ctx.err(`registration failed: ${err.message}`);
+      // 422s carry the per-field reason; without it "registration failed" is unactionable.
+      for (const [field, messages] of Object.entries(err.body?.details ?? {})) {
+        ctx.err(`  ${field}: ${[].concat(messages).join('; ')}`);
+      }
       if (err.body?.fix) ctx.err(`fix: ${err.body.fix}`);
       return 1;
     }
@@ -205,7 +211,8 @@ export async function run(args, ctx) {
           vibe: agent.vibe ?? identity.vibe
         },
         key,
-        scopes: created?.scopes ?? ['post:write'],
+        // The API nests scopes under `credential` (RegistrationController::store).
+        scopes: created?.credential?.scopes ?? created?.scopes ?? ['posts:write', 'agent:manage'],
         paused: false,
         autopublish: false,
         created_at: now().toISOString()
@@ -262,8 +269,11 @@ export async function run(args, ctx) {
 
   const agent = readConfig(ctx.profile, env).agent ?? {};
   const today = localDate(now());
-  const draftFile = draftFiles(today, { paths: ctx.paths ?? paths, profile: ctx.profile, env }).draft;
+  const files = draftFiles(today, { paths: ctx.paths ?? paths, profile: ctx.profile, env });
+  const draftFile = files.draft;
   if (existsSync(draftFile)) {
+    // ponytail: never fabricate a report for a draft init did not write — an unscanned
+    // draft must keep failing closed in `publish`.
     note('draft', { line: `intro draft kept (${draftFile})`, path: draftFile, status: 'kept' });
   } else {
     writeFileSync(
@@ -279,9 +289,38 @@ export async function run(args, ctx) {
       ),
       { mode: 0o600 }
     );
+    // `publish` fails closed without a disclosure report, so the intro draft needs its own.
+    // This one is honest: init composes the draft from the identity the human just confirmed
+    // and from fixed template prose — no journal, transcript or file content is involved,
+    // so there was nothing to redact and there is nothing to warn about.
+    writeFileSync(
+      files.report,
+      JSON.stringify(
+        {
+          date: today,
+          draft: draftFile,
+          adapter: null,
+          source: 'init-intro',
+          scans: [],
+          scanned: false,
+          scan_skipped_reason:
+            'composed by `agentsblog init` from human-confirmed identity fields; no journal content',
+          stats_dropped: false,
+          warnings: [],
+          warned: false,
+          autopublish_blocked: false,
+          sections: ['dispatch', 'note to other agents'],
+          generated_at: now().toISOString()
+        },
+        null,
+        2
+      ) + '\n',
+      { mode: 0o600 }
+    );
     note('draft', {
       line: `intro DRAFT written, not published: ${draftFile}`,
       path: draftFile,
+      report: files.report,
       status: 'created'
     });
   }
@@ -298,7 +337,12 @@ export async function run(args, ctx) {
   out('Rollback:');
   out('  agentsblog pause              stop drafting and publishing immediately');
   out('  agentsblog uninstall          remove the hook + AGENTS.md block, keep the archive');
-  out(`  agentsblog uninstall --purge  also delete ${profileDir(ctx.profile, env)}`);
+  // Same targets uninstall.js actually deletes: the legacy ~/.agentsblog/journal archive
+  // lives outside the profile dir, so understating this would understate a deletion.
+  const dir = profileDir(ctx.profile, env);
+  const legacy = journalDir(ctx.profile, env);
+  const purged = [dir, ...(legacy.startsWith(dir + sep) ? [] : [legacy])];
+  out(`  agentsblog uninstall --purge  also delete ${purged.join(' and ')}`);
   return 0;
 }
 

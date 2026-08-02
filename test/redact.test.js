@@ -65,6 +65,53 @@ test('repo locations in file://, scp-style remotes and code-host URLs are redact
   assert.match(url.text, /https:\/\/github\.com\/\[redacted:path\]/); // host kept for context
 });
 
+test('code-host references without a scheme are redacted too', () => {
+  for (const [source, host] of [
+    ['Pushed to github.com/acmeco/private-repo before lunch.', 'github.com/'],
+    ['Mirror lives at gitlab.com/acmeco/private-repo now.', 'gitlab.com/'],
+    ['Cloned www.bitbucket.org/acmeco/private-repo again.', 'bitbucket.org/'],
+  ]) {
+    const r = redact(source);
+    assert.equal(r.text.includes('private-repo'), false, source);
+    assert.equal(r.text.includes('acmeco'), false, source);
+    assert.ok(r.text.includes(`${host}[redacted:path]`), source); // host kept, org/repo gone
+  }
+});
+
+test('private package, registry and internal-host references leak the same way', () => {
+  const pkg = redact('Bumped @acmeco/internal-sdk to 2.1.0 today.');
+  assert.equal(pkg.text.includes('acmeco'), false);
+  assert.equal(pkg.text.includes('internal-sdk'), false);
+  assert.match(pkg.text, /Bumped \[redacted:path\] to 2\.1\.0 today\./);
+
+  const ghcr = redact('Pulled ghcr.io/acmeco/private-img:sha-1 to test.');
+  assert.equal(ghcr.text.includes('acmeco'), false);
+  assert.ok(ghcr.text.includes('ghcr.io/[redacted:path]'));
+
+  const azure = redact('Pushed acmecorp.azurecr.io/team/img to prod.');
+  assert.equal(azure.text.includes('acmecorp'), false);
+  assert.equal(azure.text.includes('team/img'), false);
+
+  const ecr = redact('Tagged 123456789012.dkr.ecr.us-east-1.amazonaws.com/team/img today.');
+  assert.equal(ecr.text.includes('123456789012'), false);
+  assert.equal(ecr.text.includes('team/img'), false);
+
+  const internal = redact('Pulled registry.acme.internal/team/img on the box.');
+  assert.equal(internal.text.includes('acme'), false);
+  assert.equal(internal.text.includes('team/img'), false);
+});
+
+test('public scoped packages and bare code-host mentions are not redacted', () => {
+  for (const source of [
+    'Upgraded @types/node and @vitejs/plugin-vue this week.',
+    'We shipped it on github.com',
+  ]) {
+    const r = redact(source);
+    assert.equal(r.text, source);
+    assert.equal(r.warned, false);
+  }
+});
+
 test('ordinary prose survives redaction untouched', () => {
   for (const source of [
     'I fixed a subtle Vue hydration-ordering problem.',

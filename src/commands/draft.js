@@ -126,21 +126,48 @@ export async function run(args, ctx) {
   const files = fmt.draftFiles(date, ctx);
   mkdirSync(files.dir, { recursive: true, mode: 0o700 });
 
-  const title = String(generated.title ?? check.title ?? '').trim() || `Dispatch ${date}`;
-  const tags = (generated.hashtags?.length ? generated.hashtags : check.hashtags)
-    .map((t) => String(t).toLowerCase().replace(/^#/, ''))
-    .filter(Boolean)
-    .slice(0, fmt.MAX_HASHTAGS);
+  // The title is model-authored too — pass 2 covers the whole draft, not just the body.
+  const titleScan = redact(String(generated.title ?? check.title ?? ''), denylist);
+  const title = titleScan.text.trim() || `Dispatch ${date}`;
 
-  const warned = Boolean(first.warned || second.warned || second.findings?.length);
+  // ponytail: substring match as well as the word-boundary scan — hashtags concatenate
+  // words, so #acmemigration has to die alongside #acme.
+  const denyTerms = denylist
+    .map((t) => String(t).toLowerCase().replace(/[^a-z0-9_]/g, ''))
+    .filter((t) => t.length >= 3);
+  const tags = [];
+  let hashtagsDropped = 0;
+  for (const raw of generated.hashtags?.length ? generated.hashtags : check.hashtags) {
+    const tag = String(raw).toLowerCase().replace(/^#/, '');
+    if (!tag) continue;
+    if (redact(String(raw), denylist).findings?.length || denyTerms.some((t) => tag.includes(t))) {
+      hashtagsDropped += 1;
+      continue;
+    }
+    tags.push(tag);
+    if (tags.length === fmt.MAX_HASHTAGS) break;
+  }
+
+  const secondScan = scanSummary(second);
+  const titleSummary = scanSummary(titleScan);
+  for (const [category, count] of Object.entries(titleSummary.categories)) {
+    secondScan.categories[category] = (secondScan.categories[category] ?? 0) + count;
+  }
+  secondScan.passes = Math.max(secondScan.passes ?? 1, titleSummary.passes ?? 1);
+
+  const warned = Boolean(
+    first.warned || second.warned || second.findings?.length ||
+    titleScan.warned || titleScan.findings?.length || hashtagsDropped
+  );
   const report = {
     date,
     draft: files.draft,
     adapter: adapter.id,
     scans: [
       { pass: 1, source: 'journal', ...scanSummary(first) },
-      { pass: 2, source: 'generated', ...scanSummary(second) }
+      { pass: 2, source: 'generated', ...secondScan }
     ],
+    hashtags_dropped: hashtagsDropped,
     stats_dropped: stripped.dropped,
     warned,
     autopublish_blocked: warned,

@@ -127,6 +127,73 @@ test('purge deletes the legacy journal archive it claims to delete', async () =>
   assert.ok(!existsSync(paths.profileDir('default', ctx.env)));
 });
 
+test('enabling never prints the carried credentials', async () => {
+  const bin = mkdtempSync(join(tmpdir(), 'agentsblog-bin-'));
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+  const cron = fakeCrontab();
+  const ctx = box({
+    config: { adapter: 'claude-code', last_publish: { post_id: 'p1', date: '2026-07-31' } },
+    env: { PATH: bin, ANTHROPIC_API_KEY: 'sk-ant-test' },
+    json: true
+  });
+  ctx.scheduleOpts = { platform: 'linux', exec: cron.exec };
+
+  assert.equal(await autopublish(['enable'], ctx), 0);
+
+  const said = ctx._out.join('\n');
+  // The job itself still needs the key...
+  assert.ok(cron.table.includes('sk-ant-test'), 'the installed job must still carry the credential');
+  // ...but stdout is terminal scrollback, CI logs, and agent-harness capture.
+  assert.doesNotMatch(said, /sk-ant-test/, `the API key was printed to stdout:\n${said}`);
+  assert.equal(JSON.parse(said).line, undefined, 'the rendered cron line must not be returned');
+  assert.equal(JSON.parse(said).kind, 'cron');
+});
+
+test('a scheduler failure is reported without the credentials it choked on', async () => {
+  const bin = mkdtempSync(join(tmpdir(), 'agentsblog-bin-'));
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+  const ctx = box({
+    config: { adapter: 'claude-code', last_publish: { post_id: 'p1', date: '2026-07-31' } },
+    env: { PATH: bin, ANTHROPIC_API_KEY: 'sk-ant-test' }
+  });
+  // crontab(1) rejecting the job and quoting it back is exactly how a key reaches stderr.
+  ctx.scheduleOpts = {
+    platform: 'linux',
+    exec: (file, args) => {
+      if (args[0] === '-l') return '';
+      throw new Error('Command failed: crontab -\nbad minute: 30 9 * * * ANTHROPIC_API_KEY=\'sk-ant-test\' node');
+    }
+  };
+
+  assert.equal(await autopublish(['enable'], ctx), 1);
+  const said = ctx._err.join('\n');
+  assert.doesNotMatch(said, /sk-ant-test/, `the API key was printed to stderr:\n${said}`);
+  assert.match(said, /\$ANTHROPIC_API_KEY/);
+});
+
+test('only the adapter\'s own credential vars ride along, not every CLAUDE_*', () => {
+  const bin = mkdtempSync(join(tmpdir(), 'agentsblog-bin-'));
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+  const s = schedule.spec(box({
+    config: { adapter: 'claude-code' },
+    env: {
+      PATH: bin,
+      ANTHROPIC_API_KEY: 'sk-ant-test',
+      CLAUDE_CODE_OAUTH_TOKEN: 'oauth-test',
+      CLAUDE_PID: '4242',
+      CLAUDE_EFFORT: 'high',
+      CLAUDE_CODE_SESSION_ID: 'sess-1',
+      ANTHROPIC_LOG: 'debug'
+    }
+  }));
+
+  assert.equal(s.env.ANTHROPIC_API_KEY, 'sk-ant-test');
+  assert.equal(s.env.CLAUDE_CODE_OAUTH_TOKEN, 'oauth-test');
+  for (const k of ['CLAUDE_PID', 'CLAUDE_EFFORT', 'CLAUDE_CODE_SESSION_ID', 'ANTHROPIC_LOG']) {
+    assert.equal(s.env[k], undefined, `${k} is not a credential the job needs`);
+  }
+});
+
 test('autopublish enable refuses when no distiller can be resolved', async () => {
   const cron = fakeCrontab();
   // Everything else is in order — only the distiller is missing.
