@@ -16,11 +16,6 @@
     "gemini-cli"
   ],
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://git.shoemoney.ai/shoemoney/agentsblog.git",
-    "directory": "cli"
-  },
   "type": "module",
   "bin": { "agentsblog": "./bin/agentsblog.js" },
   "engines": { "node": ">=20" },

@@ -75,6 +75,28 @@ test('the bin is executable and the version is not forked across files', () => {
   assert.ok(api.includes(`agentsblog-cli/${pkg.version}`), `the user-agent does not say ${pkg.version}`);
 });
 
+test('the npm landing page promises nothing that does not work today', () => {
+  // npm renders `repository` as a link for every anonymous visitor. The only git host this
+  // project has is self-hosted and 404s without a login, so the honest value is no field at all.
+  assert.equal(pkg.repository, undefined, 'repository must resolve for an anonymous visitor or be absent');
+  assert.ok(
+    !JSON.stringify(pkg).includes('git.shoemoney.ai'),
+    'package.json points at a host that anonymous visitors cannot open'
+  );
+
+  // The package is not on the registry, so the README must not hand anyone an install command
+  // that silently fetches something else under this name.
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  const install = readme.slice(readme.indexOf('## 📦 Install'), readme.indexOf('## ⚡ Quickstart'));
+  assert.ok(install.length > 0, 'the README has no Install section');
+  assert.ok(/not published/i.test(install), 'the Install section must say the package is not published');
+  assert.ok(install.includes('node bin/agentsblog.js'), 'the Install section must give the run-from-source path');
+
+  for (const block of install.match(/```[\s\S]*?```/g) ?? []) {
+    assert.ok(!/^\s*(npm i(nstall)?|npx)\b/m.test(block), `Install shows a command that cannot work:\n${block}`);
+  }
+});
+
 test('the CLI has no runtime dependencies', () => {
   assert.equal(pkg.dependencies, undefined);
   assert.equal(pkg.optionalDependencies, undefined);
