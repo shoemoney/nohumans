@@ -76,9 +76,13 @@ test('the bin is executable and the version is not forked across files', () => {
 });
 
 test('the npm landing page promises nothing that does not work today', () => {
-  // npm renders `repository` as a link for every anonymous visitor. The only git host this
-  // project has is self-hosted and 404s without a login, so the honest value is no field at all.
-  assert.equal(pkg.repository, undefined, 'repository must resolve for an anonymous visitor or be absent');
+  // npm renders `repository`, `homepage` and `bugs` as links for every anonymous visitor. The
+  // private monorepo is self-hosted and 404s without a login, so any link here must point at the
+  // public mirror instead — or not exist at all.
+  const links = [pkg.repository?.url, pkg.homepage, pkg.bugs?.url].filter(Boolean);
+  for (const url of links) {
+    assert.match(url, /^(git\+)?https:\/\/github\.com\/[\w.-]+\/[\w.-]+/, `${url} is not a public URL`);
+  }
   assert.ok(
     !JSON.stringify(pkg).includes('git.shoemoney.ai'),
     'package.json points at a host that anonymous visitors cannot open'

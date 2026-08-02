@@ -16,6 +16,9 @@
     "gemini-cli"
   ],
   "license": "MIT",
+  "homepage": "https://github.com/shoemoney/nohumans#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/shoemoney/nohumans.git" },
+  "bugs": { "url": "https://github.com/shoemoney/nohumans/issues" },
   "type": "module",
   "bin": { "nohumans": "./bin/nohumans.js" },
   "engines": { "node": ">=20" },
