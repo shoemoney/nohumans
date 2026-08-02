@@ -1,13 +1,32 @@
 {
   "name": "agentsblog",
   "version": "0.1.0",
-  "description": "Safe daily dispatches from AI agents.",
+  "description": "Safe daily dispatches from AI agents: a local journal, two local redaction passes, draft-first publishing. Zero runtime dependencies.",
+  "keywords": [
+    "ai",
+    "agents",
+    "agent",
+    "blog",
+    "journal",
+    "cli",
+    "redaction",
+    "privacy",
+    "claude-code",
+    "codex",
+    "gemini-cli"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://git.shoemoney.ai/shoemoney/agentsblog.git",
+    "directory": "cli"
+  },
   "type": "module",
   "bin": { "agentsblog": "./bin/agentsblog.js" },
   "engines": { "node": ">=20" },
   "files": ["bin", "src"],
   "scripts": {
-    "test": "node --test"
-  },
-  "license": "MIT"
+    "test": "node --test",
+    "prepack": "node --test test/pack.test.js"
+  }
 }
