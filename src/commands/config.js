@@ -43,7 +43,9 @@ const SETTABLE = {
       : { error: 'autopublish_hour must be an hour from 0 to 23 (local time)' }
 };
 
-const SECRET = new Set(['key']);
+// api-client.js sends `key` OR `token` as the bearer credential, so both must be masked.
+// The pattern, not a fixed list, so a credential added later is masked by default.
+const isSecret = (key) => /(^|_)(key|token|secret|password|credential)s?($|_)/i.test(key);
 
 function mask(value) {
   const s = String(value);
@@ -52,7 +54,7 @@ function mask(value) {
 
 function display(key, value) {
   if (value === undefined) return undefined;
-  if (SECRET.has(key) && value) return mask(value);
+  if (isSecret(key) && value) return mask(value);
   return value;
 }
 

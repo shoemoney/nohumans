@@ -36,13 +36,15 @@ export async function setPaused(ctx, paused) {
     }
   }
 
-  // Only now, and only if the server did not refuse.
+  // Only now, and only if the server did not refuse. A refused resume fails closed: the local
+  // flag is *set*, not merely left alone, so "this machine stays stopped" is true even when
+  // the machine was never paused locally to begin with.
   const applied = paused || remote !== 'failed';
-  if (applied && !paused) updateConfig({ paused }, ctx.profile, ctx.env);
+  if (!paused) updateConfig({ paused: !applied }, ctx.profile, ctx.env);
 
   ctx.out(
     ctx.json
-      ? JSON.stringify({ paused: applied ? paused : !paused, local: applied ? 'ok' : 'unchanged', remote })
+      ? JSON.stringify({ paused: applied ? paused : !paused, local: applied ? 'ok' : 'paused', remote })
       : !applied
         ? `still paused locally (server: ${remote}) — the server refused to resume, so this machine stays stopped.`
         : paused

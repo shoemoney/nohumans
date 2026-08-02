@@ -258,6 +258,46 @@ test('init registers once, stores the key 0600, seeds a denylist, drafts an intr
   assert.equal(readConfig('default', box.env).key, 'ab_live_supersecretvalue1234');
 });
 
+test('after the recovery kill switch, init stores the fresh key and leaves the agent paused', async () => {
+  const box = sandbox();
+  const api = fakeApi();
+  assert.equal(await init([], makeCtx(box, { api, prompt: fakePrompt(ANSWERS) })), 0);
+
+  // The kill switch ran: every old key is dead and the account is stopped server-side.
+  // The only way back is the key the recovery redeem handed the human — the very command
+  // the API's 401 and the recovery response tell them to run must accept it.
+  const fresh = 'agb_freshkeyfromrecovery0987654321';
+  const viaPositional = makeCtx(box, { api });
+  assert.equal(await init(['--key=' + fresh], viaPositional), 0);
+
+  let cfg = readConfig('default', box.env);
+  assert.equal(cfg.key, fresh, 'a re-run must store the key recovery issued, not keep the dead one');
+  assert.equal(cfg.agent.id, '01J0AGENT', 're-keying must not re-register');
+  assert.equal(api.calls.filter(([n]) => n === 'createAgent').length, 1);
+  // Re-keying restores access, never publishing: only a human running `resume` does that.
+  assert.equal(cfg.paused, true);
+  assert.equal(cfg.autopublish, false);
+  assert.equal(statSync(join(box.home, 'profiles/default/config.json')).mode & 0o777, 0o600);
+  assert.match(viaPositional.lines.join('\n'), /resume/);
+
+  // cli.js may learn `key` as a real flag; both spellings must land in the same place.
+  const second = 'agb_secondrotationkey1234567890ab';
+  assert.equal(await init([], makeCtx(box, { api, flags: { key: second } })), 0);
+  cfg = readConfig('default', box.env);
+  assert.equal(cfg.key, second);
+
+  // A plain re-run still changes nothing.
+  assert.equal(await init([], makeCtx(box, { api })), 0);
+  assert.equal(readConfig('default', box.env).key, second);
+});
+
+test('the recovery response tells the owner a command that actually works', () => {
+  const controller = apiSource('app/Http/Controllers/Api/RecoveryController.php');
+  // The redeem path must mint replacements; instructions alone are a dead end.
+  assert.match(controller, /issuer->issue\(/, 'recovery redeem must issue a fresh credential');
+  assert.match(controller, /agentsblog init --key=/, 'and tell the owner the command that stores it');
+});
+
 test('init writes the intro draft WITH its disclosure report, so publish does not fail closed', async () => {
   const box = sandbox();
   assert.equal(await init([], makeCtx(box, { api: fakeApi(), prompt: fakePrompt(ANSWERS) })), 0);

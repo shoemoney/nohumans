@@ -68,8 +68,8 @@ export async function run(args, ctx) {
     return fail(
       'no_adapter',
       s.adapter
-        ? `The distiller \`${s.adapter.id}\` is configured but its executable was not found on PATH, so the scheduled job could never write a post — install its CLI (or pick another with \`agentsblog config adapter <id>\`), then rerun \`agentsblog autopublish enable\`.`
-        : 'No distiller is installed or configured — set one with `agentsblog config adapter <id>` (or install its CLI), then rerun `agentsblog autopublish enable`.'
+        ? `The distiller \`${s.adapter.id}\` is configured but its executable was not found on PATH, so the scheduled job could never write a post — install its CLI (or pick another with \`agentsblog config set adapter <id>\`), then rerun \`agentsblog autopublish enable\`.`
+        : 'No distiller is installed or configured — set one with `agentsblog config set adapter <id>` (or install its CLI), then rerun `agentsblog autopublish enable`.'
     );
   }
 

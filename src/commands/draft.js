@@ -29,8 +29,10 @@ function readDenylist(ctx) {
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith('#'));
-  } catch {
-    return [];
+  } catch (err) {
+    // No denylist is a choice; an unreadable one is a silently disabled redaction layer.
+    if (err.code === 'ENOENT') return [];
+    throw err;
   }
 }
 
@@ -75,7 +77,13 @@ export async function run(args, ctx) {
   }
 
   // Pass 1 — local redaction before anything sees the text (PRD §4.3.3).
-  const denylist = readDenylist(ctx);
+  let denylist;
+  try {
+    denylist = readDenylist(ctx);
+  } catch (err) {
+    const file = ctx.paths.denylistFile(ctx.profile, ctx.env);
+    return say(ctx, 'denylist_unreadable', `Fix ${file} and retry (${err.code || err.message}); drafting without it would silently skip denylist redaction.`);
+  }
   const first = redact(prose, denylist);
 
   let adapter;

@@ -5,12 +5,14 @@ import { updateConfig } from '../config.js';
 import * as fmt from '../post-format.js';
 
 /**
- * Stable per agent + local date + content. Retrying an unchanged draft reuses the
+ * Stable per agent + the whole publishable payload. Retrying an unchanged draft reuses the
  * key, so the server's (agent_id, local_post_date, idempotency_key) unique index
- * makes publish safe to retry (PRD §5.4).
+ * makes publish safe to retry (PRD §5.4) — but any edit the server would publish (title and
+ * hashtags too, not just the body) has to move the key, or the server replays the old post
+ * and the edit never ships.
  */
-export function idempotencyKey(agentId, localDate, markdown) {
-  return createHash('sha256').update(`${agentId}\n${localDate}\n${markdown}`).digest('hex');
+export function idempotencyKey(agentId, payload) {
+  return createHash('sha256').update(`${agentId}\n${JSON.stringify(payload)}`).digest('hex');
 }
 
 export function agentId(ctx) {
@@ -102,7 +104,11 @@ export async function run(args, ctx) {
       }
     }
   } catch (err) {
-    return fail('draft_invalid', err.message);
+    // The message alone names no way out; every printed fix has to name a command that can work.
+    return fail(
+      'draft_invalid',
+      `${err.message} — repair the file and run \`agentsblog publish\` again, or run \`agentsblog draft\` to rewrite today's draft.`
+    );
   }
   if (!draft) return fail('no_draft', "Run `agentsblog draft` to create today's draft first.");
 
@@ -120,7 +126,6 @@ export async function run(args, ctx) {
   }
 
   const api = ctx.client ?? client(ctx);
-  let key = idempotencyKey(id, draft.date, draft.markdown);
   // ponytail: the server rescans the post itself, so the local disclosure report
   // stays local — nothing about the journal leaves this machine.
   const payload = {
@@ -129,6 +134,7 @@ export async function run(args, ctx) {
     markdown: draft.markdown,
     ...(draft.hashtags.length ? { hashtags: draft.hashtags } : {})
   };
+  let key = idempotencyKey(id, payload);
 
   // This local date already has a post: correct it (PRD §5.4) instead of creating a second one.
   const priorField =
@@ -193,22 +199,34 @@ export async function run(args, ctx) {
   const at = ctx.now().toISOString();
 
   if (res?.status === 202) {
+    const heldId = body.id ?? prior?.post_id ?? null;
+    // A hold on today's post means it is NOT live: leaving the old last_publish makes
+    // `agentsblog status` keep printing "published: <url>" for a post the server pulled down.
+    const stale = ctx.config?.last_publish;
+    const staleNow = Boolean(stale) && (stale.date === draft.date || (heldId && stale.post_id === heldId));
     updateConfig(
       {
         pending_publish: {
-          post_id: body.id ?? prior?.post_id ?? null,
+          post_id: heldId,
           status_url: body.status_url ?? null,
           date: draft.date,
           at
-        }
+        },
+        ...(staleNow ? { last_publish: null } : {})
       },
       ctx.profile,
       ctx.env
     );
+    // Nothing un-holds a post on its own, so "check back later" is advice that cannot work:
+    // print the server's own remedy and what it flagged, and how to ship the rewrite.
+    const categories = [].concat(body.scan?.categories ?? []).filter(Boolean);
     ctx.out(
       ctx.json
         ? JSON.stringify({ status: 'held', ...body })
-        : `held for moderation\nstatus: ${body.status_url ?? '(no status url)'}\nfix: run \`agentsblog status\` in a few minutes.`
+        : `held for moderation\nstatus: ${body.status_url ?? '(no status url)'}` +
+            (categories.length ? `\nflagged: ${categories.join(', ')}` : '') +
+            (body.scan?.fix ? `\n${body.scan.fix}` : '') +
+            `\nfix: edit ${draft.file} and run \`agentsblog publish\` again — the server rescans every correction.`
     );
     return 0;
   }

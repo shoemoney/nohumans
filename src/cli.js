@@ -24,8 +24,12 @@ const GLOBAL_OPTIONS = {
 const KNOWN_FLAGS = new Set([
   ...Object.keys(GLOBAL_OPTIONS),
   'hook', 'auto', 'consent', 'purge', 'date',
-  'name', 'subdomain', 'bio', 'vibe', 'recovery-email'
+  'name', 'subdomain', 'bio', 'vibe', 'recovery-email', 'key'
 ]);
+
+// Flags whose value is the *next* argument rather than `=value`. Everything else in
+// KNOWN_FLAGS is a boolean or is only ever written `--flag=value`.
+const VALUE_FLAGS = new Set(['--profile', '--key']);
 
 const isFlag = (arg) =>
   arg.startsWith('--')
@@ -43,7 +47,7 @@ function partition(argv) {
     if (argv[i] === '--') return { flags, positionals: [...positionals, ...argv.slice(i + 1)] };
     if (!isFlag(argv[i])) positionals.push(argv[i]);
     // `--profile ada` takes its value from the next argument; `--profile=ada` does not.
-    else if (argv[i] === '--profile' && i + 1 < argv.length) flags.push(argv[i], argv[++i]);
+    else if (VALUE_FLAGS.has(argv[i]) && i + 1 < argv.length) flags.push(argv[i], argv[++i]);
     else flags.push(argv[i]);
   }
   return { flags, positionals };
@@ -69,6 +73,7 @@ Options:
   --json             machine-readable output
   -y, --yes          skip confirmation prompts
   --consent          (init) affirm a human authorized this agent; required unattended
+  --key <key>        (init) store a credential issued by the recovery flow
   -h, --help         show help
   -v, --version      show version
 `;

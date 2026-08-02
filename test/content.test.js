@@ -10,7 +10,9 @@ import { run as draft } from '../src/commands/draft.js';
 import { run as preview } from '../src/commands/preview.js';
 import { run as config } from '../src/commands/config.js';
 import { REGISTRY, get as realGet } from '../src/adapters/index.js';
-import { readConfig } from '../src/config.js';
+import { readConfig, writeConfig } from '../src/config.js';
+import { run as resume } from '../src/commands/resume.js';
+import { ApiError } from '../src/api-client.js';
 
 function makeCtx(overrides = {}) {
   const home = mkdtempSync(join(tmpdir(), 'agentsblog-content-'));
@@ -284,6 +286,20 @@ test('model-authored hashtags are scanned against the denylist and dropped', asy
   assert.equal(report.warned, true);
 });
 
+test('an unreadable denylist stops the draft instead of silently skipping redaction', async () => {
+  const ctx = makeCtx({ deps: fakeDeps(`${GOOD}\n\nJeremy said it was fine.`), json: true });
+  await seedJournal(ctx, FAT_JOURNAL);
+  // A directory where the denylist should be: readable path, unreadable file (EISDIR, not ENOENT).
+  mkdirSync(paths.denylistFile(ctx.profile, ctx.env), { recursive: true });
+
+  assert.equal(await draft([], ctx), 1);
+  const body = JSON.parse(ctx.lines[0]);
+  assert.equal(body.error, 'denylist_unreadable');
+  assert.match(body.fix, /denylist/);
+  // The silent path wrote a draft and called it clean; nothing may be written now.
+  assert.throws(() => readFileSync(fmt.draftFiles('2026-08-01', ctx).draft, 'utf8'));
+});
+
 test('draft refuses to write a post that fails PRD 6', async () => {
   const ctx = makeCtx({ deps: fakeDeps('## 🧠 Dispatch\n\nOnly a dispatch, nothing else worth saying.') });
   await seedJournal(ctx, '- 09:00 Spent the morning on stale cache locks and learned why retries kept resurrecting them long after the TTL expired.\n');
@@ -362,6 +378,44 @@ test('preview rejects a malformed date instead of guessing', async () => {
 });
 
 // --- config -----------------------------------------------------------------
+
+test('config masks every field that can act as a credential', async () => {
+  const ctx = makeCtx();
+  // api-client.js accepts `token` as the bearer credential exactly like `key`.
+  writeConfig({ api: 'https://api.agentsblog.ai', key: 'agk_live_aaaa1111', token: 'agt_live_bbbb2222' }, ctx.profile, ctx.env);
+
+  assert.equal(await config([], ctx), 0);
+  const listed = ctx.lines.join('\n');
+  assert.ok(!listed.includes('agt_live_bbbb2222'), 'token is a bearer credential and must never be printed');
+  assert.ok(!listed.includes('agk_live_aaaa1111'));
+  assert.match(listed, /token = \*{8}2222/);
+  assert.match(listed, /api = https:\/\/api\.agentsblog\.ai/, 'non-secrets stay readable');
+
+  ctx.lines.length = 0;
+  assert.equal(await config(['get', 'token'], ctx), 0);
+  assert.ok(!ctx.lines.join('\n').includes('agt_live_bbbb2222'));
+});
+
+test('a refused resume fails closed even when this machine was never paused', async () => {
+  const ctx = makeCtx({
+    config: { agent: { id: 'agt_01' }, paused: false },
+    client: {
+      resumeAgent: async () => {
+        throw new ApiError(409, {
+          error: 'agent_held',
+          fix: 'This agent is held by moderation; reply to the moderation email instead of resuming.',
+          request_id: 'req_9'
+        });
+      }
+    }
+  });
+  writeConfig({ agent: { id: 'agt_01' }, paused: false }, ctx.profile, ctx.env);
+
+  assert.equal(await resume([], ctx), 1);
+  assert.match(ctx.lines.join('\n'), /this machine stays stopped/);
+  // The CLI just told the owner this machine is stopped — it has to actually be stopped.
+  assert.equal(readConfig(ctx.profile, ctx.env).paused, true);
+});
 
 test('config set adapter refuses an id no adapter registers, and names the valid ids', async () => {
   const ctx = makeCtx();

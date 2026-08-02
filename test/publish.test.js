@@ -88,12 +88,38 @@ function fakeClient(responses, update = updateDocument) {
   };
 }
 
-test('idempotency key is stable per agent+date+content and moves when content changes', () => {
-  const a = idempotencyKey('agt_01', TODAY, 'body');
-  assert.equal(a, idempotencyKey('agt_01', TODAY, 'body'));
+// The payload the CLI actually posts for the default fixture draft.
+const payloadFor = (over = {}) => ({
+  local_post_date: TODAY,
+  title: 'Stale locks',
+  markdown: BODY,
+  hashtags: ['caching'],
+  ...over
+});
+
+test('idempotency key is stable per agent+payload and moves when any published field changes', () => {
+  const a = idempotencyKey('agt_01', payloadFor());
+  assert.equal(a, idempotencyKey('agt_01', payloadFor()));
   assert.equal(a.length, 64);
-  assert.notEqual(a, idempotencyKey('agt_01', TODAY, 'body edited'));
-  assert.notEqual(a, idempotencyKey('agt_02', TODAY, 'body'));
+  assert.notEqual(a, idempotencyKey('agt_01', payloadFor({ markdown: `${BODY} edited` })));
+  assert.notEqual(a, idempotencyKey('agt_02', payloadFor()));
+  // A title-only or hashtag-only correction is a different post: it must not replay the old key.
+  assert.notEqual(a, idempotencyKey('agt_01', payloadFor({ title: 'Stale leases' })));
+  assert.notEqual(a, idempotencyKey('agt_01', payloadFor({ hashtags: ['locking'] })));
+});
+
+test('a title-only correction ships under a fresh key instead of replaying the old post', async () => {
+  const client = fakeClient({ status: 201, body: { id: 'p1', url: 'https://ada.agentsblog.ai/p1' } });
+  const first = ctxFor({ client });
+  writeDraft(first);
+  assert.equal(await publish([], first), 0);
+
+  // A second machine/profile with no record of the first publish: only the key can dedupe.
+  const second = ctxFor({ client });
+  writeDraft(second, { title: 'Stale leases' });
+  assert.equal(await publish([], second), 0);
+  assert.notEqual(client.calls[1].key, client.calls[0].key);
+  assert.equal(client.calls[1].key, idempotencyKey('agt_01', payloadFor({ title: 'Stale leases' })));
 });
 
 test('201 records the publish and prints the url', async () => {
@@ -103,7 +129,7 @@ test('201 records the publish and prints the url', async () => {
   assert.equal(await publish([], ctx), 0);
   assert.match(ctx._out.join('\n'), /https:\/\/ada\.agentsblog\.ai\/p1/);
   assert.equal(ctx._config().last_publish.post_id, 'p1');
-  assert.equal(ctx.client.calls[0].key, idempotencyKey('agt_01', TODAY, BODY));
+  assert.equal(ctx.client.calls[0].key, idempotencyKey('agt_01', payloadFor()));
 });
 
 test('202 stores the pending hold and points at status', async () => {
@@ -114,6 +140,56 @@ test('202 stores the pending hold and points at status', async () => {
   assert.match(ctx._out.join('\n'), /held for moderation[\s\S]*status\/?/);
   assert.equal(ctx._config().pending_publish.post_id, 'p2');
   assert.equal(ctx._config().last_publish, undefined);
+});
+
+// Nothing in Phase 1 un-holds a post on its own, so "run status in a few minutes" is advice
+// that can never resolve the hold — the server's own remedy is the only way out.
+test('a hold prints the server fix and the flagged categories', async () => {
+  const client = fakeClient({
+    status: 202,
+    body: {
+      id: 'p2',
+      status_url: 'https://api/v1/posts/p2/status',
+      scan: {
+        decision: 'held',
+        categories: ['pii', 'prompt_injection'],
+        fix: 'Remove the customer email address in the third paragraph.'
+      }
+    }
+  });
+  const ctx = ctxFor({ client });
+  writeDraft(ctx);
+  assert.equal(await publish([], ctx), 0);
+  const text = ctx._out.join('\n');
+  assert.match(text, /pii, prompt_injection/);
+  assert.match(text, /Remove the customer email address in the third paragraph\./);
+  assert.match(text, /agentsblog publish/); // a rewrite is the only thing that clears a hold
+  assert.doesNotMatch(text, /agentsblog status/); // waiting never un-holds it
+});
+
+test('a correction that comes back held drops the now-stale published record', async () => {
+  const heldClient = fakeClient({ status: 201, body: {} }, (id) => ({
+    id,
+    status: 'held',
+    url: null,
+    status_url: `https://api/v1/posts/${id}/status`,
+    scan: { decision: 'held', categories: ['pii'], fix: 'Remove the email address.' }
+  }));
+  const ctx = ctxFor({
+    client: heldClient,
+    config: { last_publish: { post_id: 'p1', url: 'https://ada.agentsblog.ai/p1', date: TODAY, at: '2026-08-01T10:00:00.000Z' } },
+    json: true
+  });
+  writeDraft(ctx);
+  assert.equal(await publish([], ctx), 0);
+  assert.equal(ctx._config().pending_publish.post_id, 'p1');
+  assert.equal(ctx._config().last_publish, null); // the server pulled it down: it is not live
+
+  ctx.config = ctx._config();
+  assert.equal(await status([], ctx), 0);
+  const state = JSON.parse(ctx._out.at(-1));
+  assert.equal(state.last_publish, null, 'status must not report a held post as published');
+  assert.equal(state.pending_publish.post_id, 'p1');
 });
 
 test('structured error prints the fix and does not retry a 4xx', async () => {
@@ -160,6 +236,15 @@ test('publish refuses while paused and when no draft exists', async () => {
   const empty = ctxFor({ client });
   assert.equal(await publish([], empty), 1);
   assert.match(empty._err.join('\n'), /no_draft/);
+  assert.equal(client.calls.length, 0);
+});
+
+test('an unusable draft is reported with a fix that names a command that can resolve it', async () => {
+  const client = fakeClient({ status: 201, body: {} });
+  const ctx = ctxFor({ client });
+  writeDraft(ctx, { markdown: '' });
+  assert.equal(await publish([], ctx), 1);
+  assert.match(ctx._err.join('\n'), /draft_invalid[\s\S]*`agentsblog (publish|draft)`/);
   assert.equal(client.calls.length, 0);
 });
 
@@ -261,7 +346,7 @@ test('a pointer at a post that is gone server-side is cleared and the publish re
   writeDraft(ctx);
   assert.equal(await publish([], ctx), 0);
   assert.equal(client.calls[0].update, 'gone');
-  assert.equal(client.calls[1].key, idempotencyKey('agt_01', TODAY, BODY)); // retried as a create
+  assert.equal(client.calls[1].key, idempotencyKey('agt_01', payloadFor())); // retried as a create
   assert.equal(client.calls.length, 2); // exactly once
   assert.equal(ctx._config().last_publish.post_id, 'p9');
   assert.equal(ctx._config().last_publish.url, 'https://ada.agentsblog.ai/p9'); // no stale url survives
@@ -277,7 +362,7 @@ test('a burned idempotency key is replaced with a fresh one instead of 409ing fo
     writeDraft(ctx);
     assert.equal(await publish([], ctx), 0);
     assert.equal(client.calls.length, 2);
-    assert.equal(client.calls[0].key, idempotencyKey('agt_01', TODAY, BODY));
+    assert.equal(client.calls[0].key, idempotencyKey('agt_01', payloadFor()));
     assert.notEqual(client.calls[1].key, client.calls[0].key); // a burned key is never replayed
     assert.equal(ctx._config().last_publish.post_id, 'p11');
   }
@@ -308,7 +393,7 @@ test('a 404 clears only the pointer that produced it', async () => {
   writeDraft(ctx);
   assert.equal(await publish([], ctx), 0);
   assert.equal(client.calls[0].update, 'gone');
-  assert.equal(client.calls[1].key, idempotencyKey('agt_01', TODAY, BODY));
+  assert.equal(client.calls[1].key, idempotencyKey('agt_01', payloadFor()));
   assert.equal(ctx._config().pending_publish.post_id, 'p12');
   assert.equal(ctx._config().last_publish.post_id, 'p_old'); // yesterday's publish is still real
   assert.equal(ctx._config().last_publish.url, 'https://ada.agentsblog.ai/p_old');

@@ -49,6 +49,18 @@ function flagStr(ctx, name) {
   return v.trim();
 }
 
+/**
+ * The recovery kill switch revokes every key and the redeem response hands back a fresh one, so
+ * a re-run has to be able to store it. cli.js parses `--key`, but the positional spelling is
+ * still accepted so a pasted `--key=agb_…` works whichever way the parser routed it.
+ */
+function rekey(args, ctx) {
+  const flag = flagStr(ctx, 'key');
+  if (flag) return flag;
+  const arg = (args ?? []).find((a) => typeof a === 'string' && a.startsWith('--key='));
+  return arg ? arg.slice('--key='.length).trim() : '';
+}
+
 function slugify(s) {
   return s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 63);
 }
@@ -98,11 +110,24 @@ export async function run(args, ctx) {
   };
 
   if (config.agent?.id) {
-    note('register', {
-      line: `already registered as ${config.agent.subdomain} — reusing the stored credential`,
-      agent_id: config.agent.id,
-      status: 'kept'
-    });
+    const fresh = rekey(args, ctx);
+    if (fresh && fresh !== config.key) {
+      // Recovery paused the account on its way to revoking the keys, so re-keying restores
+      // access and nothing else: `paused` stays set until a human runs `agentsblog resume`.
+      const file = writeConfig({ ...config, key: fresh, paused: true }, ctx.profile, env);
+      note('register', {
+        line: `new credential stored 0600 in ${file} — ${config.agent.subdomain} stays paused; `
+          + 'run `agentsblog resume` when you want it writing again',
+        agent_id: config.agent.id,
+        status: 'rekeyed'
+      });
+    } else {
+      note('register', {
+        line: `already registered as ${config.agent.subdomain} — reusing the stored credential`,
+        agent_id: config.agent.id,
+        status: 'kept'
+      });
+    }
   } else {
     if (!ctx.json) {
       out('agentsblog init');

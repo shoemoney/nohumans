@@ -21,7 +21,7 @@ export function jitterMinutes(agentId, span = JITTER_SPAN) {
 /**
  * @param {import('./cli.js').Ctx} ctx
  * @returns {{profile: string, label: string, hour: number, minute: number,
- *            argv: string[], env: Record<string,string>, log: string,
+ *            argv: string[], env: Record<string,string>, log: string, envFile: string,
  *            adapter: {id: string, exe: string|null}|null, warning: string|null}}
  */
 export function spec(ctx) {
@@ -50,7 +50,10 @@ export function spec(ctx) {
     adapter,
     warning,
     env,
-    log: join(profileDir(ctx.profile, ctx.env), 'autopublish.log')
+    log: join(profileDir(ctx.profile, ctx.env), 'autopublish.log'),
+    // Credentials live here (0600) and are sourced by the job, never written into a
+    // command line the whole box can read with `ps` (PRD §13).
+    envFile: join(profileDir(ctx.profile, ctx.env), 'autopublish.env')
   };
 }
 
@@ -67,7 +70,7 @@ function pinAdapter(env, source, configured) {
   try {
     adapter = (configured ? adapters.get(configured) : adapters.detect(source)[0]) ?? null;
   } catch {
-    return null; // unknown configured id; `agentsblog config adapter <id>` reports it
+    return null; // unknown configured id; `agentsblog config set adapter <id>` reports it
   }
   if (!adapter) return null;
   const exe = adapters.which(adapter.bin, source);
@@ -136,27 +139,51 @@ const defaultExec = (file, args, opts = {}) =>
 export function install(s, opts = {}) {
   const platform = opts.platform ?? process.platform;
   mkdirSync(dirname(s.log), { recursive: true, mode: 0o700 });
+  writeEnvFile(s);
   return platform === 'darwin' ? installLaunchd(s, opts) : installCron(s, opts);
 }
 
 export function uninstall(s, opts = {}) {
   const platform = opts.platform ?? process.platform;
-  return platform === 'darwin' ? uninstallLaunchd(s, opts) : uninstallCron(s, opts);
+  const result = platform === 'darwin' ? uninstallLaunchd(s, opts) : uninstallCron(s, opts);
+  rmSync(s.envFile, { force: true }); // a disabled job leaves no credential behind
+  return result;
 }
+
+/** The carried credentials — everything the job needs that must not reach a command line. */
+const secretEnv = (s) => Object.entries(s.env ?? {}).filter(([k, v]) => !SHOWN_ENV.has(k) && v);
+
+/** @returns {boolean} whether the job has to source the file at all */
+function writeEnvFile(s) {
+  const secrets = secretEnv(s);
+  if (!secrets.length) {
+    rmSync(s.envFile, { force: true }); // no adapter now: an older key must not linger
+    return false;
+  }
+  writeFileSync(s.envFile, secrets.map(([k, v]) => `export ${k}=${sq(v)}\n`).join(''), { mode: 0o600 });
+  return true;
+}
+
+/** `. <file>;` prefix for a job that carries credentials, empty for one that does not. */
+const loadEnv = (s, quote = sq) => (secretEnv(s).length ? `. ${quote(s.envFile)}; ` : '');
 
 // ── cron ────────────────────────────────────────────────────────────────────
 const marker = (s) => `# agentsblog:${s.profile}`;
 
+const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
+
 function shq(v) {
   // cron eats the command at the first unescaped `%` (it becomes a newline and the rest
   // becomes stdin), before the shell ever sees the quotes — so escape it after quoting.
-  return `'${String(v).replace(/'/g, `'\\''`)}'`.replace(/%/g, '\\%');
+  return sq(v).replace(/%/g, '\\%');
 }
 
 export function cronLine(s) {
-  const env = Object.entries(s.env).map(([k, v]) => `${k}=${shq(v)}`).join(' ');
+  // Only the non-secret vars go inline: a crontab command line is readable by every local
+  // user through `ps` while the job runs. The rest is sourced from the 0600 env file.
+  const env = Object.entries(s.env).filter(([k]) => SHOWN_ENV.has(k)).map(([k, v]) => `${k}=${shq(v)}`).join(' ');
   const cmd = s.argv.map(shq).join(' ');
-  return `${s.minute} ${s.hour} * * * ${env} ${cmd} >> ${shq(s.log)} 2>&1 ${marker(s)}`;
+  return `${s.minute} ${s.hour} * * * ${loadEnv(s, shq)}${env} ${cmd} >> ${shq(s.log)} 2>&1 ${marker(s)}`;
 }
 
 function currentCrontab(exec) {
@@ -179,7 +206,7 @@ function installCron(s, opts) {
   const lines = withoutOurs(currentCrontab(exec), s);
   lines.push(cronLine(s));
   exec('crontab', ['-'], { input: lines.join('\n') + '\n' });
-  // Never the rendered line: it embeds the carried credentials, and callers print this.
+  // Never the rendered line: callers print this and the line is job internals.
   return { kind: 'cron' };
 }
 
@@ -201,8 +228,13 @@ export function plistPath(s, opts = {}) {
 }
 
 export function plist(s) {
-  const args = s.argv.map((a) => `    <string>${xml(a)}</string>`).join('\n');
+  // Same rule as cron: credentials are sourced from the 0600 env file at run time, never
+  // baked into a file `launchctl print` and any plist reader will hand back.
+  const load = loadEnv(s);
+  const argv = load ? ['/bin/sh', '-c', `${load}exec ${s.argv.map(sq).join(' ')}`] : s.argv;
+  const args = argv.map((a) => `    <string>${xml(a)}</string>`).join('\n');
   const env = Object.entries(s.env)
+    .filter(([k]) => SHOWN_ENV.has(k))
     .map(([k, v]) => `    <key>${xml(k)}</key><string>${xml(v)}</string>`)
     .join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -236,7 +268,7 @@ function installLaunchd(s, opts) {
   const file = plistPath(s, opts);
   const domain = `gui/${opts.uid ?? process.getuid?.() ?? 501}`;
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, plist(s), { mode: 0o600 }); // it holds adapter credentials
+  writeFileSync(file, plist(s), { mode: 0o600 }); // owner-only: it names the job's paths
   try { exec('launchctl', ['bootout', `${domain}/${s.label}`]); } catch { /* not loaded */ }
   exec('launchctl', ['bootstrap', domain, file]);
   return { kind: 'launchd', file };

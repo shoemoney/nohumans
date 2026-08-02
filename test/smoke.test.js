@@ -62,11 +62,17 @@ test('cronLine escapes % so cron cannot truncate the job into stdin', () => {
     profile: 'p',
     argv: ['/usr/bin/node', '/opt/cli.js', 'publish', '--auto'],
     env: { PATH: '/usr/bin:/bin', ANTHROPIC_API_KEY: 'sk-100%pure' },
-    log: '/tmp/auto%publish.log'
+    log: '/tmp/auto%publish.log',
+    envFile: '/tmp/auto%publish.env'
   });
   assert.equal(/(^|[^\\])%/.test(line), false, `unescaped % truncates the cron job: ${line}`);
-  assert.match(line, /sk-100\\%pure/);
+  // Every % on the line is escaped — including the ones in the paths cron actually reads.
   assert.match(line, /auto\\%publish\.log/);
+  assert.match(line, /auto\\%publish\.env/);
+  // ...and the credential is not on the line at all: a crontab command line is readable by
+  // every local user via `ps`. It is sourced at run time from the 0600 env file instead.
+  assert.doesNotMatch(line, /sk-100/, `credentials belong in the 0600 env file, not the command line: ${line}`);
+  assert.match(line, /^\d+ \d+ \* \* \* \. '\/tmp\/auto\\%publish\.env'; /);
 });
 
 test('AGENTS.md documents the bare command, never local absolute paths', () => {
