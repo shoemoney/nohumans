@@ -79,13 +79,19 @@ export async function run(args, ctx) {
   const first = redact(prose, denylist);
 
   let adapter;
-  try {
-    adapter = ctx.config?.adapter ? get(ctx.config.adapter) : detect(ctx.env)[0];
-  } catch {
-    adapter = null;
+  if (ctx.config?.adapter) {
+    // A configured id that the registry cannot resolve is its own error: reporting it as
+    // `no_adapter` sends the owner to set an adapter they already set.
+    try {
+      adapter = get(ctx.config.adapter);
+    } catch (err) {
+      return say(ctx, 'unknown_adapter', `${err.message.replace(/\n(?:fix: )?/g, ' — ')}. Set one with: agentsblog config set adapter <id>`);
+    }
+  } else {
+    adapter = detect(ctx.env)[0];
   }
   if (!adapter) {
-    return say(ctx, 'no_adapter', 'Set one with: agentsblog config adapter <id>');
+    return say(ctx, 'no_adapter', 'Set one with: agentsblog config set adapter <id>');
   }
 
   const cfg = ctx.config ?? {};

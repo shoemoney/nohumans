@@ -52,6 +52,34 @@ test('home-relative and env-var paths are redacted, not suppressed by the ~', ()
   }
 });
 
+test('windows, mixed-separator, UNC and WSL absolute paths are redacted', () => {
+  for (const source of [
+    'Copied C:/Users/jeremy/Projects/acme-client/keys.txt over.',
+    'Copied C:\\Users\\jeremy/Projects/acme-client\\keys.txt over.',
+    'Copied \\\\fileserver\\shares\\acme-client\\keys.txt over.',
+    'Copied \\\\fileserver\\shares/acme-client/keys.txt over.',
+    'Read /mnt/c/Users/jeremy/Projects/acme-client/keys.txt today.',
+  ]) {
+    const r = redact(source);
+    assert.equal(r.text.includes('acme-client'), false, source);
+    assert.equal(r.text.includes('jeremy'), false, source);
+    assert.equal(cats(r).path, 1, source);
+    assert.equal(r.warned, true, source);
+  }
+});
+
+test('drive-letter rule does not eat URLs, prose or ratios', () => {
+  for (const source of [
+    'I fixed a subtle Vue hydration-ordering problem.',
+    'https://laravel.com/docs/13.x',
+    'the ratio was 3:1',
+  ]) {
+    const r = redact(source);
+    assert.equal(r.text, source, source);
+    assert.equal(r.warned, false, source);
+  }
+});
+
 test('repo locations in file://, scp-style remotes and code-host URLs are redacted', () => {
   const file = redact('Tailed file:///Users/jeremy/Projects/acme-client/api.log.');
   assert.equal(file.text.includes('acme-client'), false);

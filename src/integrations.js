@@ -175,15 +175,10 @@ export function installAgentsMd(ctx) {
   const file = agentsMdFile(ctx);
   const result = { target: 'AGENTS.md', path: file };
 
-  let command;
-  try {
-    const pinned = pinnedCommand();
-    command = `${quote(pinned.node)} ${quote(pinned.cli)} journal "Two or three lines about today."`;
-  } catch (err) {
-    return { ...result, status: 'skipped', reason: err.message };
-  }
-
-  const wanted = block(command);
+  // Bare command, never the pinned absolute node + CLI paths: AGENTS.md is repo-tracked,
+  // and pinning would publish the human's username and home directory wherever it is
+  // pushed. The pinned path belongs in ~/.claude/settings.json, which is not tracked.
+  const wanted = block('agentsblog journal "Two or three lines about today."');
   const existing = existsSync(file) ? readFileSync(file, 'utf8') : '';
   const start = existing.indexOf(BEGIN);
   const stop = existing.indexOf(END);

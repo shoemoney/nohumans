@@ -8,6 +8,9 @@ import * as fmt from '../src/post-format.js';
 import { run as journal } from '../src/commands/journal.js';
 import { run as draft } from '../src/commands/draft.js';
 import { run as preview } from '../src/commands/preview.js';
+import { run as config } from '../src/commands/config.js';
+import { REGISTRY, get as realGet } from '../src/adapters/index.js';
+import { readConfig } from '../src/config.js';
 
 function makeCtx(overrides = {}) {
   const home = mkdtempSync(join(tmpdir(), 'agentsblog-content-'));
@@ -199,6 +202,28 @@ test('a thin or missing journal produces no post, not filler', async () => {
   assert.deepEqual(ctx.lines, ['nothing worth posting today']);
 });
 
+test('draft names an unresolvable configured adapter instead of reporting no_adapter', async () => {
+  // Real registry lookup on purpose — the defect is that draft swallowed its error.
+  const ctx = makeCtx({
+    deps: { ...fakeDeps(GOOD), get: realGet },
+    config: { adapter: 'clyde-code' },
+    json: true
+  });
+  await seedJournal(ctx, FAT_JOURNAL);
+
+  assert.equal(await draft([], ctx), 1);
+  const body = JSON.parse(ctx.lines[0]);
+  // `no_adapter` tells an owner who already set one to go set one — an unbreakable loop.
+  assert.notEqual(body.error, 'no_adapter');
+  assert.equal(body.error, 'unknown_adapter');
+  assert.match(body.fix, /clyde-code/, 'the refusal must name the id that failed');
+  for (const a of REGISTRY) assert.match(body.fix, new RegExp(a.id), `valid id ${a.id} must be listed`);
+  // The hint must be a command that actually exists: `config` requires the `set` action,
+  // so the old `config adapter <id>` wording exits 1 with "unknown config action".
+  assert.match(body.fix, /agentsblog config set adapter <id>/);
+  assert.equal(await config(['set', 'adapter', REGISTRY[0].id], ctx), 0, 'the hinted invocation must succeed');
+});
+
 test('draft redacts, rescans, and writes a local draft plus a disclosure report', async () => {
   const ctx = makeCtx({ deps: fakeDeps(`${GOOD}\n\nJeremy said it was fine.`) });
   await seedJournal(ctx, '- 09:00 Spent the morning on stale cache locks and learned why retries kept resurrecting them long after the TTL expired.\n');
@@ -289,8 +314,63 @@ test('preview reports a missing draft with a fix, and renders an existing one', 
   assert.match(out, /This draft is local\. Publish with: agentsblog publish 2026-08-01/);
 });
 
+function seedDraft(ctx) {
+  const files = fmt.draftFiles('2026-08-01', ctx);
+  mkdirSync(files.dir, { recursive: true });
+  writeFileSync(files.draft, fmt.serializeDraft({ date: '2026-08-01', title: 'Stale locks', hashtags: ['caching'], markdown: GOOD }));
+  return files;
+}
+
+test('preview never calls an unscanned draft clean', async () => {
+  const ctx = makeCtx();
+  const files = seedDraft(ctx);
+  // the report `init` writes for its intro draft: no scans ran, and it says so
+  writeFileSync(files.report, JSON.stringify({
+    date: '2026-08-01',
+    adapter: null,
+    source: 'init-intro',
+    scans: [],
+    scanned: false,
+    scan_skipped_reason: 'composed by `agentsblog init` from human-confirmed identity fields; no journal content',
+    warnings: [],
+    warned: false
+  }));
+
+  assert.equal(await preview([], ctx), 0);
+  const out = ctx.lines.join('\n');
+  assert.ok(!/status {2}clean/.test(out), 'an unscanned draft must never be reported as clean');
+  assert.match(out, /NOT SCANNED/);
+  assert.match(out, /no journal content/);
+});
+
+test('preview says a corrupt disclosure report is unreadable, not missing', async () => {
+  const ctx = makeCtx();
+  const files = seedDraft(ctx);
+  writeFileSync(files.report, '{"scans": [');
+
+  assert.equal(await preview([], ctx), 0);
+  const out = ctx.lines.join('\n');
+  assert.ok(!/no disclosure report on disk/.test(out), 'a corrupt report is not a missing one');
+  assert.match(out, /disclosure report is unreadable/);
+  assert.match(out, /agentsblog draft --date 2026-08-01/);
+});
+
 test('preview rejects a malformed date instead of guessing', async () => {
   const ctx = makeCtx();
   assert.equal(await preview(['08/01/2026'], ctx), 1);
   assert.match(ctx.errs.join('\n'), /bad_date/);
+});
+
+// --- config -----------------------------------------------------------------
+
+test('config set adapter refuses an id no adapter registers, and names the valid ids', async () => {
+  const ctx = makeCtx();
+  assert.equal(await config(['set', 'adapter', 'clod-code'], ctx), 1);
+  const err = ctx.errs.join('\n');
+  assert.match(err, /invalid value for adapter/);
+  for (const a of REGISTRY) assert.ok(err.includes(a.id), `error must name ${a.id}`);
+  assert.equal(readConfig(ctx.profile, ctx.env).adapter, undefined, 'a bad id must never be written');
+
+  assert.equal(await config(['set', 'adapter', REGISTRY[0].id], ctx), 0);
+  assert.equal(readConfig(ctx.profile, ctx.env).adapter, REGISTRY[0].id);
 });

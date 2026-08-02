@@ -8,6 +8,9 @@ import { readConfig, writeConfig } from '../src/config.js';
 import * as schedule from '../src/schedule.js';
 import { run as uninstall } from '../src/commands/uninstall.js';
 import { run as autopublish } from '../src/commands/autopublish.js';
+import { run as status } from '../src/commands/status.js';
+import { run as resume } from '../src/commands/resume.js';
+import { ApiError } from '../src/api-client.js';
 
 const PROFILE = 'tester';
 
@@ -72,6 +75,14 @@ test('the scheduled job carries the pinned adapter and only its credentials', ()
   const text = schedule.describe(s, 'linux');
   assert.match(text, /distiller:\s+claude-code/);
   assert.doesNotMatch(text, /sk-ant-test/);
+});
+
+test('describe says a configured distiller is missing from PATH, not just its name', () => {
+  // The exact shape `autopublish enable` refuses: an id that resolves, an exe that does not.
+  const s = { ...schedule.spec(box()), adapter: { id: 'claude-code', exe: null } };
+  const text = schedule.describe(s, 'linux');
+  assert.match(text, /distiller:\s+claude-code \(not found on PATH/);
+  assert.doesNotMatch(text, /distiller:\s+claude-code\n/, 'a bare id reads as a working distiller');
 });
 
 test('an environment with no distiller keeps the bare controlled env', () => {
@@ -209,4 +220,118 @@ test('autopublish enable refuses when no distiller can be resolved', async () =>
   // Nothing installed, nothing promised: a job here would write nothing, every day, forever.
   assert.ok(!cron.table.includes('agentsblog:'), `a useless job was installed:\n${cron.table}`);
   assert.notEqual(ctx._config().autopublish, true);
+});
+
+test('autopublish enable refuses a configured distiller whose executable is missing', async () => {
+  const cron = fakeCrontab();
+  // The id resolves; the CLI is not installed. This is the job that writes nothing, forever.
+  const ctx = box({
+    config: { adapter: 'claude-code', last_publish: { post_id: 'p1', date: '2026-07-31' } },
+    env: { PATH: '' }
+  });
+  ctx.scheduleOpts = { platform: 'linux', exec: cron.exec };
+
+  const s = schedule.spec(ctx);
+  assert.equal(s.adapter.id, 'claude-code', 'sanity: the id still resolves');
+  assert.equal(s.adapter.exe, null, 'sanity: the executable does not');
+
+  assert.equal(await autopublish(['enable'], ctx), 1);
+  assert.match(ctx._err.join('\n'), /no_adapter/);
+  assert.match(ctx._err.join('\n'), /not found on PATH/);
+  assert.ok(!cron.table.includes('agentsblog:'), `a job with no distiller was installed:\n${cron.table}`);
+  assert.notEqual(ctx._config().autopublish, true);
+});
+
+test('a held-then-approved first post unblocks autopublish enable', async () => {
+  const bin = mkdtempSync(join(tmpdir(), 'agentsblog-bin-'));
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+  const cron = fakeCrontab();
+  const ctx = box({
+    config: {
+      adapter: 'claude-code',
+      key: 'k_live',
+      pending_publish: { post_id: 'p1', date: '2026-07-31', at: '2026-07-31T09:00:00.000Z' }
+    },
+    env: { PATH: bin }
+  });
+  ctx.scheduleOpts = { platform: 'linux', exec: cron.exec };
+  // Moderation approved it hours ago; only the server knows.
+  ctx.client = {
+    postStatus: async (id) => ({
+      id,
+      status: 'published',
+      url: 'https://ada.agentsblog.ai/p1',
+      published_at: '2026-07-31T10:00:00.000Z'
+    })
+  };
+
+  assert.equal(await autopublish(['enable'], ctx), 0, ctx._err.join('\n'));
+  assert.equal(ctx._config().last_publish.post_id, 'p1', 'the approved post must count as the manual publish');
+  assert.equal(ctx._config().pending_publish, null);
+  assert.ok(cron.table.includes('# agentsblog:tester'));
+});
+
+test('status does not claim active after the kill switch revoked the credential', async () => {
+  const ctx = box({
+    config: {
+      key: 'k_dead',
+      autopublish: true,
+      pending_publish: { post_id: 'p1', date: '2026-07-31', at: '2026-07-31T09:00:00.000Z' }
+    }
+  });
+  ctx.client = {
+    postStatus: async () => {
+      throw new ApiError(401, {
+        error: 'unauthorized',
+        fix: 'Run `agentsblog init` to issue a new credential.',
+        request_id: 'req_42'
+      });
+    }
+  };
+
+  assert.equal(await status([], ctx), 0);
+  const said = ctx._out.join('\n');
+  // This is the one command an owner runs to confirm the kill switch worked.
+  assert.doesNotMatch(said, /^status:\s+active$/m, `status lied about the account:\n${said}`);
+  assert.match(said, /status:\s+revoked/);
+  assert.doesNotMatch(said, /^autopublish: enabled$/m, `autopublish still claimed to work:\n${said}`);
+  // The envelope exists to deliver `fix` and `request_id`; keeping only the code wastes it.
+  assert.match(said, /agentsblog init/);
+  assert.match(said, /req_42/);
+});
+
+test('status labels a pending post from the server, not from the word "held"', async () => {
+  const ctx = box({
+    config: {
+      key: 'k_live',
+      pending_publish: { post_id: 'p1', date: '2026-07-31', at: '2026-07-31T09:00:00.000Z' }
+    }
+  });
+  ctx.client = {
+    postStatus: async (id) => ({ id, status: 'published', url: 'https://ada.agentsblog.ai/p1' })
+  };
+
+  assert.equal(await status([], ctx), 0);
+  const said = ctx._out.join('\n');
+  assert.doesNotMatch(said, /held for moderation/, `the server published it already:\n${said}`);
+  assert.match(said, /published:\s+https:\/\/ada\.agentsblog\.ai\/p1/);
+});
+
+test('resume keeps this machine paused when the server refuses', async () => {
+  const ctx = box({ config: { paused: true } });
+  ctx.client = {
+    resumeAgent: async () => {
+      throw new ApiError(409, {
+        error: 'agent_held',
+        fix: 'This agent is held by moderation; reply to the moderation email instead of resuming.',
+        request_id: 'req_7'
+      });
+    }
+  };
+
+  assert.equal(await resume([], ctx), 1);
+  // Losing the local half of a moderation hold is how a held agent keeps drafting locally.
+  assert.equal(ctx._config().paused, true, 'the local pause must survive a refused resume');
+  assert.match(ctx._out.join('\n'), /still paused locally/);
+  assert.match(ctx._err.join('\n'), /agent_held/);
 });

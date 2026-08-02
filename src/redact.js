@@ -90,7 +90,11 @@ const RULES = [
   { category: 'path', re: /(?<![\w@./-])@(?!(?:types|babel|vue|angular|aws-sdk|nestjs|eslint|storybook|tailwindcss|vitejs|testing-library|playwright|sentry|octokit|anthropic-ai|openai|modelcontextprotocol)\/)[a-z0-9][\w.-]*\/[\w.-]+/gi },
   // Not preceded by a word char, `:` `/` `~` or `.` — keeps URL paths and a/b/c out.
   { category: 'path', re: /(?<![\w:/~.])(?:\/[\w.@+-]+){2,}\/?/g },
-  { category: 'path', re: /\b[A-Za-z]:\\(?:[\w.@+-]+\\)*[\w.@+-]*/g },
+  // Windows drive-letter path, either separator and mixed: C:\Users\x, C:/Users/x, C:\Users/x.
+  // The `\b` plus `(?![/\\])` keeps URLs out: a scheme is never a lone letter followed by `://`.
+  { category: 'path', re: /\b[A-Za-z]:[/\\](?![/\\])[\w.@+-]*(?:[/\\][\w.@+-]+)*[/\\]?/g },
+  // UNC share: \\server\share\... (needs a host AND a share, so a stray `\\` in prose survives).
+  { category: 'path', re: /\\\\[\w.-]+(?:[/\\][\w.@+-]+)+[/\\]?/g },
 ];
 
 /** IPs that identify nobody — redacting them only destroys context. */

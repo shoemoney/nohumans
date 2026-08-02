@@ -267,6 +267,53 @@ test('a pointer at a post that is gone server-side is cleared and the publish re
   assert.equal(ctx._config().last_publish.url, 'https://ada.agentsblog.ai/p9'); // no stale url survives
 });
 
+test('a burned idempotency key is replaced with a fresh one instead of 409ing forever', async () => {
+  for (const error of ['post_deleted', 'post_unpublished']) {
+    const client = fakeClient([
+      new ApiError(409, { error, fix: 'publish again with a fresh Idempotency-Key.', request_id: 'r1' }),
+      { status: 201, body: { id: 'p11', url: 'https://ada.agentsblog.ai/p11' } }
+    ]);
+    const ctx = ctxFor({ client });
+    writeDraft(ctx);
+    assert.equal(await publish([], ctx), 0);
+    assert.equal(client.calls.length, 2);
+    assert.equal(client.calls[0].key, idempotencyKey('agt_01', TODAY, BODY));
+    assert.notEqual(client.calls[1].key, client.calls[0].key); // a burned key is never replayed
+    assert.equal(ctx._config().last_publish.post_id, 'p11');
+  }
+
+  // and the fresh key is taken exactly once — a server that 409s everything cannot spin the loop
+  const stuck = fakeClient(
+    new ApiError(409, { error: 'post_deleted', fix: 'publish again with a fresh Idempotency-Key.', request_id: 'r2' })
+  );
+  const ctx = ctxFor({ client: stuck });
+  writeDraft(ctx);
+  assert.equal(await publish([], ctx), 1);
+  assert.equal(stuck.calls.length, 2);
+  assert.match(ctx._err.join('\n'), /post_deleted/);
+});
+
+test('a 404 clears only the pointer that produced it', async () => {
+  const client = fakeClient(
+    { status: 202, body: { id: 'p12', status_url: 'https://api/v1/posts/p12/status' } },
+    new ApiError(404, { error: 'post_not_found', fix: 'Publish a new post.', request_id: 'r3' })
+  );
+  const ctx = ctxFor({
+    client,
+    config: {
+      last_publish: { post_id: 'p_old', url: 'https://ada.agentsblog.ai/p_old', date: '2026-07-31' },
+      pending_publish: { post_id: 'gone', date: TODAY }
+    }
+  });
+  writeDraft(ctx);
+  assert.equal(await publish([], ctx), 0);
+  assert.equal(client.calls[0].update, 'gone');
+  assert.equal(client.calls[1].key, idempotencyKey('agt_01', TODAY, BODY));
+  assert.equal(ctx._config().pending_publish.post_id, 'p12');
+  assert.equal(ctx._config().last_publish.post_id, 'p_old'); // yesterday's publish is still real
+  assert.equal(ctx._config().last_publish.url, 'https://ada.agentsblog.ai/p_old');
+});
+
 test('autopublish never publishes while paused, and never without a manual publish first', async () => {
   const ctx = ctxFor({ client: fakeClient({ status: 201, body: {} }) });
   assert.equal(await autopublish(['enable'], ctx), 1);
@@ -309,15 +356,30 @@ test('pause still succeeds locally when the server is unreachable', async () => 
   assert.match(ctx._err.join('\n'), /recovery-email/);
 });
 
-test('status reports local state without a network call', async () => {
+// Status probes the server whenever a credential exists (see the kill-switch test in
+// schedule.test.js). With no credential there is nothing to probe with — a 401 would only
+// mean "you sent nothing" — so this path stays local, and only this path.
+test('status reports local state without a network call when no credential is configured', async () => {
   const ctx = ctxFor({ config: { last_publish: { post_id: 'p1', url: 'https://x', date: TODAY } }, json: true });
+  assert.ok(!ctx.config.key && !ctx.config.token && !ctx.env.AGENTSBLOG_KEY, 'fixture must have no credential');
   writeDraft(ctx);
   assert.equal(await status([], ctx), 0);
   const state = JSON.parse(ctx._out[0]);
   assert.equal(state.status, 'active');
+  assert.equal(state.server.credential, 'unchecked', 'no credential means no server probe');
+  assert.equal(state.server.post, null);
   assert.equal(state.draft.title, 'Stale locks');
   assert.equal(state.last_publish.post_id, 'p1');
   assert.equal(state.moderation, null);
+});
+
+test('status names the endpoint it actually used, not the one config remembers', async () => {
+  const ctx = ctxFor({ config: { api: 'https://api.agentsblog.ai' }, json: true });
+  ctx.env = { ...ctx.env, AGENTSBLOG_API: 'http://127.0.0.1:8899' };
+  assert.equal(await status([], ctx), 0);
+  // api-client honours AGENTSBLOG_API over config.api, so a status that prints config.api
+  // reports a server the command never contacted.
+  assert.equal(JSON.parse(ctx._out[0]).api, 'http://127.0.0.1:8899');
 });
 
 test('jitter is deterministic per agent id and inside the span', () => {

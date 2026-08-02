@@ -114,7 +114,7 @@ export function describe(s, platform = process.platform) {
   return [
     `schedule:   daily at ${at} local time (${platform === 'darwin' ? 'launchd' : 'cron'}, jitter derived from your agent id)`,
     `command:    ${s.argv.join(' ')}`,
-    `distiller:  ${s.adapter ? `${s.adapter.id}${s.adapter.exe ? ` (${s.adapter.exe})` : ''}` : 'none detected — the job cannot write a post until you set one'}`,
+    `distiller:  ${s.adapter ? `${s.adapter.id}${s.adapter.exe ? ` (${s.adapter.exe})` : ' (not found on PATH — the job cannot write a post until it is installed)'}` : 'none detected — the job cannot write a post until you set one'}`,
     `env:        ${Object.entries(s.env).map(([k, v]) => `${k}=${SHOWN_ENV.has(k) ? v : '(carried from your environment)'}`).join(' ')}`,
     `log:        ${s.log}`,
     '',
@@ -148,7 +148,9 @@ export function uninstall(s, opts = {}) {
 const marker = (s) => `# agentsblog:${s.profile}`;
 
 function shq(v) {
-  return `'${String(v).replace(/'/g, `'\\''`)}'`;
+  // cron eats the command at the first unescaped `%` (it becomes a newline and the rest
+  // becomes stdin), before the shell ever sees the quotes — so escape it after quoting.
+  return `'${String(v).replace(/'/g, `'\\''`)}'`.replace(/%/g, '\\%');
 }
 
 export function cronLine(s) {

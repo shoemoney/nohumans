@@ -132,6 +132,88 @@ test('the child sees a controlled environment', async () => {
   assert.doesNotMatch(out.markdown, /AWS_SECRET_ACCESS_KEY/);
 });
 
+// PRD §13: a distiller gets its own provider's credentials and nobody else's. The probe reuses
+// each real adapter's `envAllow`, so the registry's own rules are what is under test.
+test('a distiller never inherits another provider credentials', async () => {
+  const NAMES = REGISTRY.flatMap((a) => a.env ?? []);
+  const hostile = {
+    PATH: process.env.PATH,
+    HOME: '/home/agent',
+    AWS_SECRET_ACCESS_KEY: 'aws-not-yours-01',
+    GITHUB_TOKEN: 'github-not-yours-01',
+    NPM_TOKEN: 'npm-not-yours-01',
+  };
+  for (const name of NAMES) hostile[name] = `value-of-${name}`;
+
+  for (const real of REGISTRY) {
+    const probe = scriptAdapter(`creds-${real.id}`, `${READ_STDIN}
+    process.stdout.write(JSON.stringify({
+      title: 'Env',
+      markdown: '## Dispatch\\n' + Object.keys(process.env).sort().join(','),
+      hashtags: [],
+    }));
+  });`, { envAllow: real.envAllow });
+
+    const { markdown } = await distill(probe, { journal: 'a day', env: hostile });
+    const reached = new Set(markdown.split('\n')[1].split(','));
+
+    for (const name of real.env ?? []) {
+      assert.ok(reached.has(name), `${real.id} must receive its own ${name}`);
+    }
+    for (const name of NAMES.filter((n) => !(real.env ?? []).includes(n))) {
+      assert.ok(!reached.has(name), `${real.id} must not receive ${name}`);
+    }
+    for (const name of ['AWS_SECRET_ACCESS_KEY', 'GITHUB_TOKEN', 'NPM_TOKEN']) {
+      assert.ok(!reached.has(name), `${real.id} must not receive ${name}`);
+    }
+  }
+});
+
+// The distiller's stdout becomes a public post. Whatever we hand the child must not come back.
+test('a distiller that echoes its environment cannot get it into the post', async () => {
+  const adapter = scriptAdapter('leak', `${READ_STDIN}
+  const e = process.env;
+  process.stdout.write(JSON.stringify({
+    title: 'my key is ' + e.ANTHROPIC_API_KEY,
+    markdown: '## Dispatch\\nhome=' + e.HOME + ' key=' + e.ANTHROPIC_API_KEY +
+      ' url=' + e.ANTHROPIC_BASE_URL + ' path=' + e.PATH + ' term=' + e.TERM,
+    hashtags: [],
+  }));
+});`, { envAllow: [/^ANTHROPIC_/] });
+
+  const env = {
+    PATH: process.env.PATH,
+    HOME: '/home/ada-lovelace-private',
+    ANTHROPIC_API_KEY: 'sk-ant-must-not-appear-0001',
+    ANTHROPIC_BASE_URL: 'https://gateway-must-not-appear.example',
+  };
+  const out = await distill(adapter, { journal: 'a day', env });
+
+  const post = `${out.title}\n${out.markdown}`;
+  for (const secret of Object.values(env)) {
+    assert.ok(!post.includes(secret), `a value handed to the distiller came back in the draft`);
+  }
+  assert.match(out.markdown, /key=\[redacted:env\]/);
+  // Short constants are ordinary words: the scrub must not turn every "1" into a marker.
+  assert.match(out.markdown, /term=dumb/);
+});
+
+test('a credential on stderr is not printed when the distiller fails', async () => {
+  const adapter = scriptAdapter(
+    'leaky-stderr',
+    'process.stderr.write("auth failed for " + process.env.ANTHROPIC_API_KEY + "\\n"); process.exit(7);',
+    { envAllow: [/^ANTHROPIC_/] },
+  );
+  await assert.rejects(
+    distill(adapter, { journal: 'a day', env: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'sk-ant-stderr-secret-0002' } }),
+    (err) => {
+      assert.ok(!err.message.includes('sk-ant-stderr-secret-0002'), 'the key reached the terminal and the autopublish log');
+      assert.match(err.message, /exited 7: auth failed for \[redacted:env\]/);
+      return true;
+    },
+  );
+});
+
 test('distill surfaces failure, timeout, and runaway output', async () => {
   const failing = scriptAdapter('fail', 'process.stderr.write("model is angry\\n"); process.exit(3);');
   await assert.rejects(distill(failing, { journal: 'a day' }), /exited 3: model is angry/);

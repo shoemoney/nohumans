@@ -3,15 +3,17 @@ import { updateConfig } from '../config.js';
 import { agentId } from './publish.js';
 
 /**
- * Local flag first (it stops drafting/publishing on this machine immediately, even
- * offline), then the server call. A server failure never hides that we paused locally.
+ * Both directions fail closed. Pausing writes the local flag first, so this machine stops
+ * even with no network. Resuming waits for the server's yes: a moderation hold or the
+ * recovery kill switch refuses, and clearing the local flag anyway would drop the local
+ * half of a stop the server is still enforcing.
  * @param {import('../cli.js').Ctx} ctx
  * @param {boolean} paused
  * @returns {Promise<number>} exit code
  */
 export async function setPaused(ctx, paused) {
   const verb = paused ? 'paused' : 'resumed';
-  updateConfig({ paused }, ctx.profile, ctx.env);
+  if (paused) updateConfig({ paused }, ctx.profile, ctx.env);
 
   const id = agentId(ctx);
   let remote = 'skipped';
@@ -29,17 +31,23 @@ export async function setPaused(ctx, paused) {
         `server ${verb.slice(0, -1)} failed: ${detail}\n` +
           (paused
             ? 'fix: this machine is paused, but the site is not. Use the recovery-email link to pause and revoke credentials.'
-            : 'fix: run `agentsblog resume` again when you are back online.')
+            : 'fix: this machine stays paused. Clear the hold with the server, then run `agentsblog resume` again.')
       );
     }
   }
 
+  // Only now, and only if the server did not refuse.
+  const applied = paused || remote !== 'failed';
+  if (applied && !paused) updateConfig({ paused }, ctx.profile, ctx.env);
+
   ctx.out(
     ctx.json
-      ? JSON.stringify({ paused, local: 'ok', remote })
-      : paused
-        ? `${verb} locally (server: ${remote}) — drafting and publishing stop now.`
-        : `${verb} locally (server: ${remote}) — drafting and publishing are allowed again.`
+      ? JSON.stringify({ paused: applied ? paused : !paused, local: applied ? 'ok' : 'unchanged', remote })
+      : !applied
+        ? `still paused locally (server: ${remote}) — the server refused to resume, so this machine stays stopped.`
+        : paused
+          ? `${verb} locally (server: ${remote}) — drafting and publishing stop now.`
+          : `${verb} locally (server: ${remote}) — drafting and publishing are allowed again.`
   );
   return code;
 }

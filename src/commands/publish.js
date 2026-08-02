@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { client, ApiError } from '../api-client.js';
 import { updateConfig } from '../config.js';
@@ -120,7 +120,7 @@ export async function run(args, ctx) {
   }
 
   const api = ctx.client ?? client(ctx);
-  const key = idempotencyKey(id, draft.date, draft.markdown);
+  let key = idempotencyKey(id, draft.date, draft.markdown);
   // ponytail: the server rescans the post itself, so the local disclosure report
   // stays local — nothing about the journal leaves this machine.
   const payload = {
@@ -131,10 +131,14 @@ export async function run(args, ctx) {
   };
 
   // This local date already has a post: correct it (PRD §5.4) instead of creating a second one.
-  let prior =
-    [ctx.config?.last_publish, ctx.config?.pending_publish].find((p) => p?.post_id && p.date === draft.date) ?? null;
+  const priorField =
+    ['last_publish', 'pending_publish'].find(
+      (f) => ctx.config?.[f]?.post_id && ctx.config[f].date === draft.date
+    ) ?? null;
+  let prior = priorField ? ctx.config[priorField] : null;
 
   let res;
+  let freshKey = false;
   for (;;) {
     try {
       // ponytail: api-client already retries idempotent writes with backoff — don't retry twice.
@@ -147,9 +151,23 @@ export async function run(args, ctx) {
       break;
     } catch (err) {
       // A pointer at a post that no longer exists 404s forever: drop it and publish fresh, once.
+      // Only the pointer that produced the 404 — the other one is still a valid record.
       if (prior && err instanceof ApiError && err.status === 404) {
-        updateConfig({ last_publish: null, pending_publish: null }, ctx.profile, ctx.env);
+        updateConfig({ [priorField]: null }, ctx.profile, ctx.env);
         prior = null;
+        continue;
+      }
+      // The key of a deleted/taken-down post 409s forever, and it is a pure hash of the draft, so
+      // every retry replays it. The server's own fix is a fresh key: take it, once (never loops).
+      if (
+        !prior &&
+        !freshKey &&
+        err instanceof ApiError &&
+        err.status === 409 &&
+        (err.body?.error === 'post_deleted' || err.body?.error === 'post_unpublished')
+      ) {
+        key = randomUUID();
+        freshKey = true;
         continue;
       }
       if (err instanceof ApiError) {

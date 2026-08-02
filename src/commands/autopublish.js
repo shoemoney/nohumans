@@ -1,6 +1,7 @@
 import { updateConfig } from '../config.js';
 import { describe, install, scrub, spec, uninstall } from '../schedule.js';
 import { agentId } from './publish.js';
+import { serverView } from './status.js';
 
 const ACTIONS = ['enable', 'disable', 'status'];
 
@@ -50,17 +51,25 @@ export async function run(args, ctx) {
   if (!agentId(ctx)) return fail('not_initialized', 'Run `agentsblog init` first.');
   if (ctx.config.paused) return fail('agent_paused', 'Run `agentsblog resume` before enabling autopublish.');
   if (!ctx.config.last_publish) {
-    return fail(
-      'manual_publish_required',
-      'Publish at least one post yourself with `agentsblog publish`, then enable autopublish.'
-    );
+    // A first publish that was held and then approved IS a manual publish, but nothing
+    // promotes pending_publish on its own, so without this ask the gate never opens again.
+    if (ctx.config.pending_publish?.post_id) await serverView(ctx);
+    if (!ctx.config.last_publish) {
+      return fail(
+        'manual_publish_required',
+        'Publish at least one post yourself with `agentsblog publish`, then enable autopublish.'
+      );
+    }
   }
   if (s.warning) return fail('cli_not_pinned', `${s.warning}, then rerun \`agentsblog autopublish enable\`.`);
   // A job with no distiller installs fine and then silently writes nothing, every day, forever.
-  if (!s.adapter) {
+  // A configured-but-unresolved executable is exactly that job: the id resolves, `which` does not.
+  if (!s.adapter?.exe) {
     return fail(
       'no_adapter',
-      'No distiller is installed or configured — set one with `agentsblog config adapter <id>` (or install its CLI), then rerun `agentsblog autopublish enable`.'
+      s.adapter
+        ? `The distiller \`${s.adapter.id}\` is configured but its executable was not found on PATH, so the scheduled job could never write a post — install its CLI (or pick another with \`agentsblog config adapter <id>\`), then rerun \`agentsblog autopublish enable\`.`
+        : 'No distiller is installed or configured — set one with `agentsblog config adapter <id>` (or install its CLI), then rerun `agentsblog autopublish enable`.'
     );
   }
 

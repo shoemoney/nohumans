@@ -6,19 +6,22 @@ export function loadDraft(date, ctx) {
   const files = draftFiles(date, ctx);
   const draft = parseDraft(readFileSync(files.draft, 'utf8'));
   let report = null;
+  let reportError = null;
   try {
     report = JSON.parse(readFileSync(files.report, 'utf8'));
-  } catch {
-    report = null; // a draft without a report still previews, just with no disclosure
+  } catch (err) {
+    // A draft without a report still previews, just with no disclosure — but a report that
+    // exists and is corrupt is not "missing": publish refuses to ship it, so say so.
+    if (err.code !== 'ENOENT') reportError = err.message || String(err);
   }
-  return { files, draft, report };
+  return { files, draft, report, reportError };
 }
 
 /**
  * Terminal preview. Prints categories and counts from the scan passes — never the
  * matched values, so a preview can never reproduce a secret (PRD §8.3).
  */
-export function render({ files, draft, report }, ctx) {
+export function render({ files, draft, report, reportError }, ctx) {
   ctx.out(`draft   ${files.draft}`);
   ctx.out(`date    ${draft.date ?? '(unknown)'}`);
   ctx.out(`title   ${draft.title}`);
@@ -28,7 +31,12 @@ export function render({ files, draft, report }, ctx) {
   ctx.out('');
   ctx.out('— disclosure —');
   if (!report) {
-    ctx.out('no disclosure report on disk; re-run: agentsblog draft');
+    if (reportError) {
+      ctx.out(`disclosure report is unreadable: ${files.report} (${reportError})`);
+      ctx.out(`publish will refuse this draft; regenerate it with: agentsblog draft --date ${draft.date ?? ''}`.trim());
+    } else {
+      ctx.out('no disclosure report on disk; re-run: agentsblog draft');
+    }
   } else {
     ctx.out(`adapter ${report.adapter ?? '(unknown)'}`);
     for (const pass of report.scans ?? []) {
@@ -39,9 +47,15 @@ export function render({ files, draft, report }, ctx) {
       );
     }
     if (report.stats_dropped) ctx.out('stats   dropped — no harness field backed those numbers');
-    ctx.out(report.warned
-      ? 'status  warnings present — autonomous publishing is blocked for this draft'
-      : 'status  clean');
+    // An unscanned draft is never "clean" — the report says so itself, so print it.
+    if (report.scanned === false) {
+      ctx.out(`status  NOT SCANNED — ${report.scan_skipped_reason || 'the report records no scan and no reason'}`);
+    }
+    if (report.warned) {
+      ctx.out('status  warnings present — autonomous publishing is blocked for this draft');
+    } else if (report.scanned !== false) {
+      ctx.out('status  clean');
+    }
   }
   ctx.out('');
   ctx.out(`This draft is local. Publish with: agentsblog publish ${draft.date ?? ''}`.trim());
@@ -74,7 +88,13 @@ export async function run(args, ctx) {
   }
 
   if (ctx.json) {
-    ctx.out(JSON.stringify({ ok: true, ...loaded.draft, report: loaded.report, file: loaded.files.draft }));
+    ctx.out(JSON.stringify({
+      ok: true,
+      ...loaded.draft,
+      report: loaded.report,
+      report_error: loaded.reportError ?? undefined,
+      file: loaded.files.draft
+    }));
     return 0;
   }
   render(loaded, ctx);

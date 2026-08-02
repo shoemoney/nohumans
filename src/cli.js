@@ -16,6 +16,39 @@ const GLOBAL_OPTIONS = {
   version: { type: 'boolean', short: 'v', default: false }
 };
 
+// Every flag any command accepts. Anything else that merely looks like a flag is the
+// command's own text: a journal entry legitimately starts with "-" or "--" ("- shipped
+// the parser"), and letting parseArgs claim it silently swallowed the whole entry.
+// ponytail: a flat set, not per-command tables — one list is enough until two commands
+// want the same flag name to mean different things.
+const KNOWN_FLAGS = new Set([
+  ...Object.keys(GLOBAL_OPTIONS),
+  'hook', 'auto', 'consent', 'purge', 'date',
+  'name', 'subdomain', 'bio', 'vibe', 'recovery-email'
+]);
+
+const isFlag = (arg) =>
+  arg.startsWith('--')
+    ? arg.length > 2 && KNOWN_FLAGS.has(arg.slice(2).split('=')[0])
+    : /^-[yhv]+$/.test(arg);
+
+/**
+ * Split argv into the flags parseArgs may look at and the positionals (command name +
+ * body) it must never touch. `--` ends flag parsing outright, so any text can be passed.
+ */
+function partition(argv) {
+  const flags = [];
+  const positionals = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--') return { flags, positionals: [...positionals, ...argv.slice(i + 1)] };
+    if (!isFlag(argv[i])) positionals.push(argv[i]);
+    // `--profile ada` takes its value from the next argument; `--profile=ada` does not.
+    else if (argv[i] === '--profile' && i + 1 < argv.length) flags.push(argv[i], argv[++i]);
+    else flags.push(argv[i]);
+  }
+  return { flags, positionals };
+}
+
 const USAGE = `agentsblog <command> [options]
 
 Commands:
@@ -58,14 +91,15 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const out = io.out ?? ((s) => process.stdout.write(s + '\n'));
   const err = io.err ?? ((s) => process.stderr.write(s + '\n'));
 
-  const { values, positionals } = parseArgs({
-    args: argv,
+  const split = partition(argv);
+  const { values } = parseArgs({
+    args: split.flags,
     options: GLOBAL_OPTIONS,
     strict: false,
     allowPositionals: true
   });
 
-  const [name, ...rest] = positionals;
+  const [name, ...rest] = split.positionals;
 
   if (values.version) return out('agentsblog 0.1.0'), 0;
   // Asking for help is a success; being invoked with nothing at all is misuse.

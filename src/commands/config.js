@@ -7,6 +7,7 @@
  *   agentsblog config set <key> <value>
  */
 
+import { REGISTRY } from '../adapters/index.js';
 import { readConfig, writeConfig } from '../config.js';
 import { configFile } from '../paths.js';
 
@@ -23,10 +24,14 @@ const SETTABLE = {
     if (url.protocol !== 'https:' && !local) return { error: 'api must use https' };
     return { value: url.origin };
   },
-  adapter: (v) =>
-    /^[a-z0-9][a-z0-9-]{0,39}$/.test(v)
-      ? { value: v }
-      : { error: 'adapter must be a lowercase id such as claude-code' },
+  // Shape is not existence: an id `draft` cannot resolve is an unbreakable loop, so the
+  // registry is checked here, at the write boundary, and the valid ids are named.
+  adapter: (v) => {
+    const id = v.trim();
+    return REGISTRY.some((a) => a.id === id)
+      ? { value: id }
+      : { error: `unknown adapter ${id}; valid ids: ${REGISTRY.map((a) => a.id).join(', ')}` };
+  },
   // PRD 4.2 — public open-source projects may be named only when the owner enables them.
   projects: (v) => ({
     value: v.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 50)

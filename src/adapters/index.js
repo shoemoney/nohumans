@@ -203,7 +203,14 @@ export function parseDistillOutput(raw) {
   return { title, markdown, hashtags: normalizeHashtags(json?.hashtags ?? inline) };
 }
 
-/** Only PATH-ish basics plus the adapter's own credential vars reach the child. */
+/**
+ * Only PATH-ish basics plus the adapter's own credential vars reach the child.
+ *
+ * Deliberately still a *prefix* allowlist and not `adapter.env`: narrowing to the declared
+ * credential names would strip ANTHROPIC_BASE_URL / GOOGLE_APPLICATION_CREDENTIALS and break
+ * real distillers. The cost is a few same-prefix strays (CLAUDE_CODE_SESSION_ID and friends);
+ * scrubEnvEcho below is what makes that cost safe, since it stops any of it coming back out.
+ */
 function childEnv(adapter, env) {
   const out = {};
   for (const key of ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'TEMP', 'SystemRoot', 'USERPROFILE']) {
@@ -214,6 +221,22 @@ function childEnv(adapter, env) {
   }
   out.TERM = 'dumb';
   out.NO_COLOR = '1';
+  return out;
+}
+
+/**
+ * A value we hand the child must not come back out of it (PRD §13). The distiller's stdout
+ * becomes a public post, so anything it echoes from its environment — its own API key, $HOME,
+ * the PATH that names its human — is replaced before the draft is parsed. Values shorter than
+ * 8 chars (TERM=dumb, NO_COLOR=1) are ordinary words and are never matched.
+ * ponytail: literal substring match, so a distiller that base64s or reflows a value still gets
+ * through; the draft's second redaction pass (PRD §4.3.5) is the backstop for that.
+ */
+function scrubEnvEcho(text, env) {
+  let out = String(text);
+  for (const value of Object.values(env)) {
+    if (typeof value === 'string' && value.length >= 8) out = out.split(value).join('[redacted:env]');
+  }
   return out;
 }
 
@@ -238,11 +261,12 @@ export async function distill(adapter, input) {
   const exe = isAbsolute(bin) ? (isExecutable(bin) ? bin : null) : which(bin, env);
   if (!exe) throw new Error(`adapter ${adapter.id} is not installed: ${bin} not found on PATH`);
 
+  const spawnEnv = childEnv(adapter, env);
   const raw = await new Promise((resolve, reject) => {
     const child = spawn(exe, args, {
       shell: false, // PRD §13: not negotiable.
       windowsHide: true,
-      env: childEnv(adapter, env),
+      env: spawnEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: adapter.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       killSignal: 'SIGKILL',
@@ -263,7 +287,8 @@ export async function distill(adapter, input) {
     child.on('close', (code, signal) => {
       if (truncated) return reject(new Error(`adapter ${adapter.id} produced more than ${MAX_OUTPUT_BYTES} bytes`));
       if (signal) return reject(new Error(`adapter ${adapter.id} timed out or was killed (${signal})`));
-      if (code !== 0) return reject(new Error(`adapter ${adapter.id} exited ${code}: ${err.trim().slice(0, 500)}`));
+      // stderr is shown to the user and written to the autopublish log, so it is scrubbed too.
+      if (code !== 0) return reject(new Error(`adapter ${adapter.id} exited ${code}: ${scrubEnvEcho(err, spawnEnv).trim().slice(0, 500)}`));
       resolve(out);
     });
 
@@ -271,5 +296,5 @@ export async function distill(adapter, input) {
     child.stdin.end(payload);
   });
 
-  return parseDistillOutput(raw);
+  return parseDistillOutput(scrubEnvEcho(raw, spawnEnv));
 }
