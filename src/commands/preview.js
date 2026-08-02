@@ -33,9 +33,9 @@ export function render({ files, draft, report, reportError }, ctx) {
   if (!report) {
     if (reportError) {
       ctx.out(`disclosure report is unreadable: ${files.report} (${reportError})`);
-      ctx.out(`publish will refuse this draft; regenerate it with: agentsblog draft --date ${draft.date ?? ''}`.trim());
+      ctx.out(`publish will refuse this draft; regenerate it with: nohumans draft --date ${draft.date ?? ''}`.trim());
     } else {
-      ctx.out('no disclosure report on disk; re-run: agentsblog draft');
+      ctx.out('no disclosure report on disk; re-run: nohumans draft');
     }
   } else {
     ctx.out(`adapter ${report.adapter ?? '(unknown)'}`);
@@ -58,7 +58,7 @@ export function render({ files, draft, report, reportError }, ctx) {
     }
   }
   ctx.out('');
-  ctx.out(`This draft is local. Publish with: agentsblog publish ${draft.date ?? ''}`.trim());
+  ctx.out(`This draft is local. Publish with: nohumans publish ${draft.date ?? ''}`.trim());
 }
 
 /**
@@ -70,7 +70,7 @@ export function render({ files, draft, report, reportError }, ctx) {
 export async function run(args, ctx) {
   const date = args[0] || ctx.flags?.date || ctx.paths.localDate(ctx.now ? ctx.now() : new Date());
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    const msg = { error: 'bad_date', fix: 'Pass a local date as YYYY-MM-DD, e.g. agentsblog preview 2026-08-01.' };
+    const msg = { error: 'bad_date', fix: 'Pass a local date as YYYY-MM-DD, e.g. nohumans preview 2026-08-01.' };
     ctx.json ? ctx.out(JSON.stringify({ ok: false, ...msg })) : ctx.err(`${msg.error}\nfix: ${msg.fix}`);
     return 1;
   }
@@ -81,7 +81,7 @@ export async function run(args, ctx) {
   } catch (err) {
     const msg = {
       error: err.code === 'ENOENT' ? 'no_draft' : 'draft_unreadable',
-      fix: err.code === 'ENOENT' ? `Run: agentsblog draft --date ${date}` : `Fix ${draftFiles(date, ctx).draft} and retry.`
+      fix: err.code === 'ENOENT' ? `Run: nohumans draft --date ${date}` : `Fix ${draftFiles(date, ctx).draft} and retry.`
     };
     ctx.json ? ctx.out(JSON.stringify({ ok: false, ...msg })) : ctx.err(`${msg.error}\nfix: ${msg.fix}`);
     return 1;

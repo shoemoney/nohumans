@@ -22,7 +22,7 @@ export async function run(args, ctx) {
   };
 
   if (!ACTIONS.includes(action)) {
-    return fail('unknown_action', `Run \`agentsblog autopublish <${ACTIONS.join('|')}>\`.`);
+    return fail('unknown_action', `Run \`nohumans autopublish <${ACTIONS.join('|')}>\`.`);
   }
 
   const s = spec(ctx);
@@ -48,8 +48,8 @@ export async function run(args, ctx) {
   }
 
   // enable
-  if (!agentId(ctx)) return fail('not_initialized', 'Run `agentsblog init` first.');
-  if (ctx.config.paused) return fail('agent_paused', 'Run `agentsblog resume` before enabling autopublish.');
+  if (!agentId(ctx)) return fail('not_initialized', 'Run `nohumans init` first.');
+  if (ctx.config.paused) return fail('agent_paused', 'Run `nohumans resume` before enabling autopublish.');
   if (!ctx.config.last_publish) {
     // A first publish that was held and then approved IS a manual publish, but nothing
     // promotes pending_publish on its own, so without this ask the gate never opens again.
@@ -57,19 +57,19 @@ export async function run(args, ctx) {
     if (!ctx.config.last_publish) {
       return fail(
         'manual_publish_required',
-        'Publish at least one post yourself with `agentsblog publish`, then enable autopublish.'
+        'Publish at least one post yourself with `nohumans publish`, then enable autopublish.'
       );
     }
   }
-  if (s.warning) return fail('cli_not_pinned', `${s.warning}, then rerun \`agentsblog autopublish enable\`.`);
+  if (s.warning) return fail('cli_not_pinned', `${s.warning}, then rerun \`nohumans autopublish enable\`.`);
   // A job with no distiller installs fine and then silently writes nothing, every day, forever.
   // A configured-but-unresolved executable is exactly that job: the id resolves, `which` does not.
   if (!s.adapter?.exe) {
     return fail(
       'no_adapter',
       s.adapter
-        ? `The distiller \`${s.adapter.id}\` is configured but its executable was not found on PATH, so the scheduled job could never write a post — install its CLI (or pick another with \`agentsblog config set adapter <id>\`), then rerun \`agentsblog autopublish enable\`.`
-        : 'No distiller is installed or configured — set one with `agentsblog config set adapter <id>` (or install its CLI), then rerun `agentsblog autopublish enable`.'
+        ? `The distiller \`${s.adapter.id}\` is configured but its executable was not found on PATH, so the scheduled job could never write a post — install its CLI (or pick another with \`nohumans config set adapter <id>\`), then rerun \`nohumans autopublish enable\`.`
+        : 'No distiller is installed or configured — set one with `nohumans config set adapter <id>` (or install its CLI), then rerun `nohumans autopublish enable`.'
     );
   }
 
@@ -80,7 +80,7 @@ export async function run(args, ctx) {
     // The scheduler's own error text can quote the job we just handed it, credentials included.
     return fail(
       'schedule_install_failed',
-      scrub(`${err.message} — fix the scheduler, then rerun \`agentsblog autopublish enable\`.`, s)
+      scrub(`${err.message} — fix the scheduler, then rerun \`nohumans autopublish enable\`.`, s)
     );
   }
 

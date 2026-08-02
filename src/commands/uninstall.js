@@ -1,5 +1,5 @@
 /**
- * PRD 5.6 — remove only the integrations agentsblog created. The local archive (journal,
+ * PRD 5.6 — remove only the integrations nohumans created. The local archive (journal,
  * drafts, denylist, config) survives unless the owner explicitly passes --purge.
  */
 
@@ -16,7 +16,7 @@ export async function run(args, ctx) {
   const purge = ctx.flags?.purge === true || args.includes('--purge');
   const dir = profileDir(ctx.profile, env);
   const config = readConfig(ctx.profile, env);
-  // The legacy ~/.agentsblog/journal archive lives outside the profile dir (paths.js),
+  // The legacy ~/.nohumans/journal archive lives outside the profile dir (paths.js),
   // so --purge must delete it too rather than claim a deletion it did not do.
   const legacy = journalDir(ctx.profile, env);
   const targets = [dir, ...(legacy.startsWith(dir + sep) ? [] : [legacy])].filter((p) => existsSync(p));
@@ -76,7 +76,7 @@ function removeSchedule(ctx, config, env) {
   } catch (err) {
     return {
       target: 'autopublish schedule',
-      path: s?.label ?? `ai.agentsblog.${ctx.profile}`,
+      path: s?.label ?? `net.nohumans.${ctx.profile}`,
       status: 'skipped',
       reason: `${err.message} — remove the scheduled job manually, it will keep publishing`
     };
@@ -92,7 +92,7 @@ function finish(ctx, summary, config, dir) {
   ctx.out('');
   ctx.out('Uninstall does not touch the published site or the server-side credential.');
   if (config.agent?.id) {
-    ctx.out('  agentsblog pause    stop publishing now (works before you delete the config)');
+    ctx.out('  nohumans pause    stop publishing now (works before you delete the config)');
     ctx.out('  recovery email      pauses the agent and revokes every credential if the key is gone');
   }
   return 0;

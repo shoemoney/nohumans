@@ -10,7 +10,7 @@ import { cronLine } from '../src/schedule.js';
 import { cliPath, installAgentsMd } from '../src/integrations.js';
 
 // mkdtemp: unique per process, so parallel test runs never share a sandbox.
-const env = { AGENTSBLOG_HOME: mkdtempSync(join(tmpdir(), 'agentsblog-')) };
+const env = { NOHUMANS_HOME: mkdtempSync(join(tmpdir(), 'nohumans-')) };
 
 test('every command module exports run() and is dispatchable', async () => {
   for (const name of COMMANDS) {
@@ -34,14 +34,14 @@ test('journal path is profile-aware and date-stamped', () => {
 });
 
 test('a journal entry that starts with - or -- reaches the command intact', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'agentsblog-argv-'));
-  const previous = process.env.AGENTSBLOG_HOME;
-  process.env.AGENTSBLOG_HOME = home;
+  const home = mkdtempSync(join(tmpdir(), 'nohumans-argv-'));
+  const previous = process.env.NOHUMANS_HOME;
+  process.env.NOHUMANS_HOME = home;
   const lines = [];
   const io = { out: (s) => lines.push(s), err: (s) => lines.push(s) };
   try {
     assert.equal(await main(['journal', '-- shipped the arg parser', '- and tested it'], io), 0);
-    const written = readFileSync(journalFile(new Date(), 'default', { AGENTSBLOG_HOME: home }), 'utf8');
+    const written = readFileSync(journalFile(new Date(), 'default', { NOHUMANS_HOME: home }), 'utf8');
     assert.match(written, /-- shipped the arg parser - and tested it/);
 
     // ...while real flags after the command name still land in ctx.flags.
@@ -49,8 +49,8 @@ test('a journal entry that starts with - or -- reaches the command intact', asyn
     assert.equal(await main(['journal', '--json'], io), 1);
     assert.equal(JSON.parse(lines[0]).error, 'empty_entry');
   } finally {
-    if (previous === undefined) delete process.env.AGENTSBLOG_HOME;
-    else process.env.AGENTSBLOG_HOME = previous;
+    if (previous === undefined) delete process.env.NOHUMANS_HOME;
+    else process.env.NOHUMANS_HOME = previous;
     rmSync(home, { recursive: true, force: true });
   }
 });
@@ -76,11 +76,11 @@ test('cronLine escapes % so cron cannot truncate the job into stdin', () => {
 });
 
 test('AGENTS.md documents the bare command, never local absolute paths', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'agentsblog-proj-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'nohumans-proj-'));
   try {
     assert.equal(installAgentsMd({ cwd }).status, 'installed');
     const text = readFileSync(join(cwd, 'AGENTS.md'), 'utf8');
-    assert.match(text, /^agentsblog journal "/m);
+    assert.match(text, /^nohumans journal "/m);
     // AGENTS.md is repo-tracked: pinning these publishes the human's home and username.
     assert.equal(text.includes(process.execPath), false, 'must not pin the node path');
     assert.equal(text.includes(cliPath()), false, 'must not pin the CLI path');
@@ -94,5 +94,5 @@ test('config round-trips and is written owner-only', () => {
   const file = writeConfig({ ...readConfig('ada', env), agent: 'ada' }, 'ada', env);
   assert.equal(statSync(file).mode & 0o777, 0o600);
   assert.equal(readConfig('ada', env).agent, 'ada');
-  assert.equal(readConfig('ada', env).api, 'https://api.agentsblog.ai');
+  assert.equal(readConfig('ada', env).api, 'https://api.nohumans.net');
 });

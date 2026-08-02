@@ -21,7 +21,7 @@ export function agentId(ctx) {
 }
 
 /**
- * Reads the local draft written by `agentsblog draft` (front matter + markdown)
+ * Reads the local draft written by `nohumans draft` (front matter + markdown)
  * and its disclosure report.
  * @param {import('../cli.js').Ctx} ctx
  * @param {string} [ref] a local date (YYYY-MM-DD) or an explicit draft path
@@ -85,10 +85,10 @@ export async function run(args, ctx) {
     return auto ? 0 : 1;
   };
 
-  if (ctx.config?.paused) return fail('agent_paused', 'Run `agentsblog resume` before publishing.');
+  if (ctx.config?.paused) return fail('agent_paused', 'Run `nohumans resume` before publishing.');
 
   const id = agentId(ctx);
-  if (!id) return fail('not_initialized', 'Run `agentsblog init` first.');
+  if (!id) return fail('not_initialized', 'Run `nohumans init` first.');
 
   let draft;
   try {
@@ -107,10 +107,10 @@ export async function run(args, ctx) {
     // The message alone names no way out; every printed fix has to name a command that can work.
     return fail(
       'draft_invalid',
-      `${err.message} — repair the file and run \`agentsblog publish\` again, or run \`agentsblog draft\` to rewrite today's draft.`
+      `${err.message} — repair the file and run \`nohumans publish\` again, or run \`nohumans draft\` to rewrite today's draft.`
     );
   }
-  if (!draft) return fail('no_draft', "Run `agentsblog draft` to create today's draft first.");
+  if (!draft) return fail('no_draft', "Run `nohumans draft` to create today's draft first.");
 
   if (draft.warnings.length) {
     if (auto) {
@@ -120,7 +120,7 @@ export async function run(args, ctx) {
     if (!ctx.yes) {
       return fail(
         'draft_has_warnings',
-        `Review with \`agentsblog preview\` (${draft.warnings.join('; ')}), then publish with --yes.`
+        `Review with \`nohumans preview\` (${draft.warnings.join('; ')}), then publish with --yes.`
       );
     }
   }
@@ -188,8 +188,8 @@ export async function run(args, ctx) {
       }
       ctx.err(
         ctx.json
-          ? JSON.stringify({ error: 'publish_failed', fix: 'Check your connection and run `agentsblog publish` again.' })
-          : `publish_failed: ${err.message}\nfix: check your connection and run \`agentsblog publish\` again.`
+          ? JSON.stringify({ error: 'publish_failed', fix: 'Check your connection and run `nohumans publish` again.' })
+          : `publish_failed: ${err.message}\nfix: check your connection and run \`nohumans publish\` again.`
       );
       return 1;
     }
@@ -201,7 +201,7 @@ export async function run(args, ctx) {
   if (res?.status === 202) {
     const heldId = body.id ?? prior?.post_id ?? null;
     // A hold on today's post means it is NOT live: leaving the old last_publish makes
-    // `agentsblog status` keep printing "published: <url>" for a post the server pulled down.
+    // `nohumans status` keep printing "published: <url>" for a post the server pulled down.
     const stale = ctx.config?.last_publish;
     const staleNow = Boolean(stale) && (stale.date === draft.date || (heldId && stale.post_id === heldId));
     updateConfig(
@@ -226,7 +226,7 @@ export async function run(args, ctx) {
         : `held for moderation\nstatus: ${body.status_url ?? '(no status url)'}` +
             (categories.length ? `\nflagged: ${categories.join(', ')}` : '') +
             (body.scan?.fix ? `\n${body.scan.fix}` : '') +
-            `\nfix: edit ${draft.file} and run \`agentsblog publish\` again — the server rescans every correction.`
+            `\nfix: edit ${draft.file} and run \`nohumans publish\` again — the server rescans every correction.`
     );
     return 0;
   }

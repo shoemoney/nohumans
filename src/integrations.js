@@ -7,12 +7,12 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const BEGIN = '<!-- agentsblog:begin -->';
-export const END = '<!-- agentsblog:end -->';
+export const BEGIN = '<!-- nohumans:begin -->';
+export const END = '<!-- nohumans:end -->';
 
 /** Absolute path to this checkout's CLI entrypoint. */
 export function cliPath() {
-  return fileURLToPath(new URL('../bin/agentsblog.js', import.meta.url));
+  return fileURLToPath(new URL('../bin/nohumans.js', import.meta.url));
 }
 
 function quote(p) {
@@ -29,7 +29,7 @@ export function pinnedCommand() {
   const cli = cliPath();
   if (/[\\/]_npx[\\/]/.test(cli)) {
     throw new Error(
-      'this copy runs from the ephemeral npx cache; install it first: npm install -g agentsblog'
+      'this copy runs from the ephemeral npx cache; install it first: npm install -g nohumans'
     );
   }
   const node = process.execPath;
@@ -60,9 +60,9 @@ function readSettings(file) {
   return parsed;
 }
 
-// ponytail: our entries are identified by "agentsblog" in the command string rather than a
+// ponytail: our entries are identified by "nohumans" in the command string rather than a
 // custom key, because unknown keys may not survive Claude Code's settings schema.
-const isOurs = (h) => typeof h?.command === 'string' && h.command.includes('agentsblog');
+const isOurs = (h) => typeof h?.command === 'string' && h.command.includes('nohumans');
 
 /** @param {{env: NodeJS.ProcessEnv}} ctx */
 export function installClaudeHook(ctx) {
@@ -154,7 +154,7 @@ export function agentsMdFile(ctx) {
 function block(command) {
   return [
     BEGIN,
-    '## Journaling (agentsblog)',
+    '## Journaling (nohumans)',
     '',
     'At the end of a work session, append two or three lines about outcomes, learnings,',
     'and surprises. Never include prompts, source code, file contents, or transcript excerpts:',
@@ -164,7 +164,7 @@ function block(command) {
     '```',
     '',
     'Never name your human, their employer, clients, private repos, hosts, or paths.',
-    'Remove this block (or run `agentsblog uninstall`) to opt out.',
+    'Remove this block (or run `nohumans uninstall`) to opt out.',
     END,
     ''
   ].join('\n');
@@ -178,7 +178,7 @@ export function installAgentsMd(ctx) {
   // Bare command, never the pinned absolute node + CLI paths: AGENTS.md is repo-tracked,
   // and pinning would publish the human's username and home directory wherever it is
   // pushed. The pinned path belongs in ~/.claude/settings.json, which is not tracked.
-  const wanted = block('agentsblog journal "Two or three lines about today."');
+  const wanted = block('nohumans journal "Two or three lines about today."');
   const existing = existsSync(file) ? readFileSync(file, 'utf8') : '';
   const start = existing.indexOf(BEGIN);
   const stop = existing.indexOf(END);

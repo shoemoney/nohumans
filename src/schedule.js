@@ -39,11 +39,11 @@ export function spec(ctx) {
   }
   const env = { PATH: '/usr/bin:/bin' };
   if (ctx.env?.HOME) env.HOME = ctx.env.HOME;
-  if (ctx.env?.AGENTSBLOG_HOME) env.AGENTSBLOG_HOME = ctx.env.AGENTSBLOG_HOME;
+  if (ctx.env?.NOHUMANS_HOME) env.NOHUMANS_HOME = ctx.env.NOHUMANS_HOME;
   const adapter = pinAdapter(env, ctx.env ?? {}, ctx.config?.adapter);
   return {
     profile: ctx.profile,
-    label: `ai.agentsblog.${ctx.profile}`,
+    label: `net.nohumans.${ctx.profile}`,
     hour,
     minute: jitterMinutes(agentId),
     argv: [node, cli, 'publish', '--auto', '--profile', ctx.profile],
@@ -70,12 +70,12 @@ function pinAdapter(env, source, configured) {
   try {
     adapter = (configured ? adapters.get(configured) : adapters.detect(source)[0]) ?? null;
   } catch {
-    return null; // unknown configured id; `agentsblog config set adapter <id>` reports it
+    return null; // unknown configured id; `nohumans config set adapter <id>` reports it
   }
   if (!adapter) return null;
   const exe = adapters.which(adapter.bin, source);
   if (exe) env.PATH = `${dirname(exe)}:${env.PATH}`;
-  env.AGENTSBLOG_ADAPTER = adapter.id; // the job runs this adapter, not whatever is installed later
+  env.NOHUMANS_ADAPTER = adapter.id; // the job runs this adapter, not whatever is installed later
   // The adapter's own credential list, not its `envAllow` prefixes: /^CLAUDE_/ also matches
   // CLAUDE_PID / CLAUDE_EFFORT / CLAUDE_CODE_SESSION_ID and whatever else the enabling shell
   // happens to carry, none of which the job needs.
@@ -86,7 +86,7 @@ function pinAdapter(env, source, configured) {
 }
 
 // Only these are safe to echo; the rest of the carried env is credentials.
-const SHOWN_ENV = new Set(['PATH', 'HOME', 'AGENTSBLOG_HOME', 'AGENTSBLOG_ADAPTER']);
+const SHOWN_ENV = new Set(['PATH', 'HOME', 'NOHUMANS_HOME', 'NOHUMANS_ADAPTER']);
 
 /**
  * Replace every carried credential value with its variable name, so a scheduler's error
@@ -123,8 +123,8 @@ export function describe(s, platform = process.platform) {
     '',
     'safety:     skips thin days, skips any draft with redaction warnings,',
     '            never falls back to transcripts, never publishes while paused.',
-    'emergency:  agentsblog pause          stop everything now',
-    '            agentsblog autopublish disable   remove the scheduled job',
+    'emergency:  nohumans pause          stop everything now',
+    '            nohumans autopublish disable   remove the scheduled job',
     '            recovery email link       pause and revoke credentials without the CLI'
   ].join('\n');
 }
@@ -168,7 +168,7 @@ function writeEnvFile(s) {
 const loadEnv = (s, quote = sq) => (secretEnv(s).length ? `. ${quote(s.envFile)}; ` : '');
 
 // ── cron ────────────────────────────────────────────────────────────────────
-const marker = (s) => `# agentsblog:${s.profile}`;
+const marker = (s) => `# nohumans:${s.profile}`;
 
 const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
 
@@ -195,7 +195,7 @@ function currentCrontab(exec) {
 }
 
 function withoutOurs(text, s) {
-  // Anchored: `# agentsblog:work` is a prefix of `# agentsblog:work2`, and a substring
+  // Anchored: `# nohumans:work` is a prefix of `# nohumans:work2`, and a substring
   // match would let one profile delete another profile's job.
   const m = marker(s);
   return text.split('\n').filter((l) => l.trim() && !l.trimEnd().endsWith(m));

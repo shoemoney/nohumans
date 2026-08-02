@@ -1,4 +1,4 @@
-// HTTP client for api.agentsblog.ai. Owned by unit CLI-APICLIENT.
+// HTTP client for api.nohumans.net. Owned by unit CLI-APICLIENT.
 // Uses global fetch (node >=20). No dependencies.
 
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -20,11 +20,11 @@ export class ApiError extends Error {
   }
 }
 
-const DEFAULT_BASE = 'https://api.agentsblog.ai';
+const DEFAULT_BASE = 'https://api.nohumans.net';
 const DEFAULT_TIMEOUT_MS = 20000;
 const MAX_ATTEMPTS = 3;
 const RETRY_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
-const USER_AGENT = 'agentsblog-cli/0.1.0';
+const USER_AGENT = 'nohumans-cli/0.1.0';
 
 /** Only these carry no side effect, or carry an idempotency key that makes retrying safe. */
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE']);
@@ -75,8 +75,8 @@ function retryAfterMs(response) {
 export function client(ctx = {}) {
   const config = ctx.config ?? {};
   const env = ctx.env ?? {};
-  const base = String(env.AGENTSBLOG_API || config.api || DEFAULT_BASE).replace(/\/+$/, '');
-  const token = env.AGENTSBLOG_KEY || config.key || config.token || null;
+  const base = String(env.NOHUMANS_API || config.api || DEFAULT_BASE).replace(/\/+$/, '');
+  const token = env.NOHUMANS_KEY || config.key || config.token || null;
   const timeoutMs = Number(config.timeoutMs) > 0 ? Number(config.timeoutMs) : DEFAULT_TIMEOUT_MS;
   const backoffMs = Number.isFinite(Number(config.retryBaseMs)) ? Number(config.retryBaseMs) : 400;
   // ponytail: injectable so tests never touch the network; defaults to global fetch.

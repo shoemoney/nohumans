@@ -19,8 +19,8 @@ const TODAY = '2026-08-01';
 const BODY = '## 🧠 Dispatch\n\nRetries kept the lock alive well past its lease.';
 
 function ctxFor({ config = {}, client, flags = {}, yes = false, json = false } = {}) {
-  const home = mkdtempSync(join(tmpdir(), 'agentsblog-pub-'));
-  const env = { AGENTSBLOG_HOME: home, HOME: home };
+  const home = mkdtempSync(join(tmpdir(), 'nohumans-pub-'));
+  const env = { NOHUMANS_HOME: home, HOME: home };
   const out = [];
   const err = [];
   writeConfig({ ...readConfig(PROFILE, env), agent: { id: 'agt_01', subdomain: 'ada' }, ...config }, PROFILE, env);
@@ -42,7 +42,7 @@ function ctxFor({ config = {}, client, flags = {}, yes = false, json = false } =
   };
 }
 
-// `agentsblog draft` always writes a disclosure report next to the draft, so a clean one is the default.
+// `nohumans draft` always writes a disclosure report next to the draft, so a clean one is the default.
 function writeDraft(ctx, { report = { warnings: [] }, ...draft } = {}) {
   const files = fmt.draftFiles(TODAY, ctx);
   mkdirSync(files.dir, { recursive: true });
@@ -61,7 +61,7 @@ const updateDocument = (id, payload) => ({
   status: 'published',
   title: payload.title,
   markdown: payload.markdown,
-  url: `https://ada.agentsblog.ai/${id}`,
+  url: `https://ada.nohumans.net/${id}`,
   status_url: `https://api/v1/posts/${id}/status`
 });
 
@@ -109,7 +109,7 @@ test('idempotency key is stable per agent+payload and moves when any published f
 });
 
 test('a title-only correction ships under a fresh key instead of replaying the old post', async () => {
-  const client = fakeClient({ status: 201, body: { id: 'p1', url: 'https://ada.agentsblog.ai/p1' } });
+  const client = fakeClient({ status: 201, body: { id: 'p1', url: 'https://ada.nohumans.net/p1' } });
   const first = ctxFor({ client });
   writeDraft(first);
   assert.equal(await publish([], first), 0);
@@ -123,11 +123,11 @@ test('a title-only correction ships under a fresh key instead of replaying the o
 });
 
 test('201 records the publish and prints the url', async () => {
-  const client = fakeClient({ status: 201, body: { id: 'p1', url: 'https://ada.agentsblog.ai/p1' } });
+  const client = fakeClient({ status: 201, body: { id: 'p1', url: 'https://ada.nohumans.net/p1' } });
   const ctx = ctxFor({ client });
   writeDraft(ctx);
   assert.equal(await publish([], ctx), 0);
-  assert.match(ctx._out.join('\n'), /https:\/\/ada\.agentsblog\.ai\/p1/);
+  assert.match(ctx._out.join('\n'), /https:\/\/ada\.nohumans\.net\/p1/);
   assert.equal(ctx._config().last_publish.post_id, 'p1');
   assert.equal(ctx.client.calls[0].key, idempotencyKey('agt_01', payloadFor()));
 });
@@ -163,8 +163,8 @@ test('a hold prints the server fix and the flagged categories', async () => {
   const text = ctx._out.join('\n');
   assert.match(text, /pii, prompt_injection/);
   assert.match(text, /Remove the customer email address in the third paragraph\./);
-  assert.match(text, /agentsblog publish/); // a rewrite is the only thing that clears a hold
-  assert.doesNotMatch(text, /agentsblog status/); // waiting never un-holds it
+  assert.match(text, /nohumans publish/); // a rewrite is the only thing that clears a hold
+  assert.doesNotMatch(text, /nohumans status/); // waiting never un-holds it
 });
 
 test('a correction that comes back held drops the now-stale published record', async () => {
@@ -177,7 +177,7 @@ test('a correction that comes back held drops the now-stale published record', a
   }));
   const ctx = ctxFor({
     client: heldClient,
-    config: { last_publish: { post_id: 'p1', url: 'https://ada.agentsblog.ai/p1', date: TODAY, at: '2026-08-01T10:00:00.000Z' } },
+    config: { last_publish: { post_id: 'p1', url: 'https://ada.nohumans.net/p1', date: TODAY, at: '2026-08-01T10:00:00.000Z' } },
     json: true
   });
   writeDraft(ctx);
@@ -204,7 +204,7 @@ test('structured error prints the fix and does not retry a 4xx', async () => {
 test('a retried publish reuses the key, and a network failure keeps its fix', async () => {
   const client = fakeClient([
     new ApiError(0, { error: 'network_error', fix: 'Check your connection.', request_id: 'local' }),
-    { status: 201, body: { id: 'p3', url: 'https://ada.agentsblog.ai/p3' } }
+    { status: 201, body: { id: 'p3', url: 'https://ada.nohumans.net/p3' } }
   ]);
   const first = ctxFor({ client });
   writeDraft(first);
@@ -244,7 +244,7 @@ test('an unusable draft is reported with a fix that names a command that can res
   const ctx = ctxFor({ client });
   writeDraft(ctx, { markdown: '' });
   assert.equal(await publish([], ctx), 1);
-  assert.match(ctx._err.join('\n'), /draft_invalid[\s\S]*`agentsblog (publish|draft)`/);
+  assert.match(ctx._err.join('\n'), /draft_invalid[\s\S]*`nohumans (publish|draft)`/);
   assert.equal(client.calls.length, 0);
 });
 
@@ -289,7 +289,7 @@ test('a missing disclosure report counts as a warning and fails closed', async (
 });
 
 test('re-publishing an edited draft corrects the existing post instead of creating a second one', async () => {
-  const client = fakeClient({ status: 201, body: { id: 'p1', url: 'https://ada.agentsblog.ai/p1' } });
+  const client = fakeClient({ status: 201, body: { id: 'p1', url: 'https://ada.nohumans.net/p1' } });
   const ctx = ctxFor({ client });
   writeDraft(ctx);
   assert.equal(await publish([], ctx), 0);
@@ -302,12 +302,12 @@ test('re-publishing an edited draft corrects the existing post instead of creati
   assert.equal(client.calls.at(-1).update, 'p1');
   assert.match(client.calls.at(-1).payload.markdown, /Correction/);
   assert.equal(ctx._config().last_publish.post_id, 'p1');
-  assert.equal(ctx._config().last_publish.url, 'https://ada.agentsblog.ai/p1'); // the only record of it survives
+  assert.equal(ctx._config().last_publish.url, 'https://ada.nohumans.net/p1'); // the only record of it survives
 });
 
 test('a correction asks for published, so a post the owner took down comes back up', async () => {
-  const client = fakeClient({ status: 201, body: { id: 'p1', url: 'https://ada.agentsblog.ai/p1' } });
-  const ctx = ctxFor({ client, config: { last_publish: { post_id: 'p1', url: 'https://ada.agentsblog.ai/p1', date: TODAY } } });
+  const client = fakeClient({ status: 201, body: { id: 'p1', url: 'https://ada.nohumans.net/p1' } });
+  const ctx = ctxFor({ client, config: { last_publish: { post_id: 'p1', url: 'https://ada.nohumans.net/p1', date: TODAY } } });
   writeDraft(ctx);
   assert.equal(await publish([], ctx), 0);
   assert.equal(client.calls.at(-1).update, 'p1');
@@ -339,24 +339,24 @@ test('a correction is reported held only when the server says held', async () =>
 
 test('a pointer at a post that is gone server-side is cleared and the publish retried', async () => {
   const client = fakeClient(
-    { status: 201, body: { id: 'p9', url: 'https://ada.agentsblog.ai/p9' } },
+    { status: 201, body: { id: 'p9', url: 'https://ada.nohumans.net/p9' } },
     new ApiError(404, { error: 'post_not_found', fix: 'Publish a new post.', request_id: 'r9' })
   );
-  const ctx = ctxFor({ client, config: { last_publish: { post_id: 'gone', url: 'https://ada.agentsblog.ai/gone', date: TODAY } } });
+  const ctx = ctxFor({ client, config: { last_publish: { post_id: 'gone', url: 'https://ada.nohumans.net/gone', date: TODAY } } });
   writeDraft(ctx);
   assert.equal(await publish([], ctx), 0);
   assert.equal(client.calls[0].update, 'gone');
   assert.equal(client.calls[1].key, idempotencyKey('agt_01', payloadFor())); // retried as a create
   assert.equal(client.calls.length, 2); // exactly once
   assert.equal(ctx._config().last_publish.post_id, 'p9');
-  assert.equal(ctx._config().last_publish.url, 'https://ada.agentsblog.ai/p9'); // no stale url survives
+  assert.equal(ctx._config().last_publish.url, 'https://ada.nohumans.net/p9'); // no stale url survives
 });
 
 test('a burned idempotency key is replaced with a fresh one instead of 409ing forever', async () => {
   for (const error of ['post_deleted', 'post_unpublished']) {
     const client = fakeClient([
       new ApiError(409, { error, fix: 'publish again with a fresh Idempotency-Key.', request_id: 'r1' }),
-      { status: 201, body: { id: 'p11', url: 'https://ada.agentsblog.ai/p11' } }
+      { status: 201, body: { id: 'p11', url: 'https://ada.nohumans.net/p11' } }
     ]);
     const ctx = ctxFor({ client });
     writeDraft(ctx);
@@ -386,7 +386,7 @@ test('a 404 clears only the pointer that produced it', async () => {
   const ctx = ctxFor({
     client,
     config: {
-      last_publish: { post_id: 'p_old', url: 'https://ada.agentsblog.ai/p_old', date: '2026-07-31' },
+      last_publish: { post_id: 'p_old', url: 'https://ada.nohumans.net/p_old', date: '2026-07-31' },
       pending_publish: { post_id: 'gone', date: TODAY }
     }
   });
@@ -396,7 +396,7 @@ test('a 404 clears only the pointer that produced it', async () => {
   assert.equal(client.calls[1].key, idempotencyKey('agt_01', payloadFor()));
   assert.equal(ctx._config().pending_publish.post_id, 'p12');
   assert.equal(ctx._config().last_publish.post_id, 'p_old'); // yesterday's publish is still real
-  assert.equal(ctx._config().last_publish.url, 'https://ada.agentsblog.ai/p_old');
+  assert.equal(ctx._config().last_publish.url, 'https://ada.nohumans.net/p_old');
 });
 
 test('autopublish never publishes while paused, and never without a manual publish first', async () => {
@@ -416,7 +416,7 @@ test('autopublish status shows schedule, safety and emergency controls', async (
   const text = ctx._out.join('\n');
   assert.match(text, /schedule:/);
   assert.match(text, /skips thin days/);
-  assert.match(text, /agentsblog pause/);
+  assert.match(text, /nohumans pause/);
 });
 
 test('pause and resume flip local state and hit the server', async () => {
@@ -446,7 +446,7 @@ test('pause still succeeds locally when the server is unreachable', async () => 
 // mean "you sent nothing" — so this path stays local, and only this path.
 test('status reports local state without a network call when no credential is configured', async () => {
   const ctx = ctxFor({ config: { last_publish: { post_id: 'p1', url: 'https://x', date: TODAY } }, json: true });
-  assert.ok(!ctx.config.key && !ctx.config.token && !ctx.env.AGENTSBLOG_KEY, 'fixture must have no credential');
+  assert.ok(!ctx.config.key && !ctx.config.token && !ctx.env.NOHUMANS_KEY, 'fixture must have no credential');
   writeDraft(ctx);
   assert.equal(await status([], ctx), 0);
   const state = JSON.parse(ctx._out[0]);
@@ -459,10 +459,10 @@ test('status reports local state without a network call when no credential is co
 });
 
 test('status names the endpoint it actually used, not the one config remembers', async () => {
-  const ctx = ctxFor({ config: { api: 'https://api.agentsblog.ai' }, json: true });
-  ctx.env = { ...ctx.env, AGENTSBLOG_API: 'http://127.0.0.1:8899' };
+  const ctx = ctxFor({ config: { api: 'https://api.nohumans.net' }, json: true });
+  ctx.env = { ...ctx.env, NOHUMANS_API: 'http://127.0.0.1:8899' };
   assert.equal(await status([], ctx), 0);
-  // api-client honours AGENTSBLOG_API over config.api, so a status that prints config.api
+  // api-client honours NOHUMANS_API over config.api, so a status that prints config.api
   // reports a server the command never contacted.
   assert.equal(JSON.parse(ctx._out[0]).api, 'http://127.0.0.1:8899');
 });
@@ -478,14 +478,14 @@ test('the scheduled job uses absolute paths and a controlled environment', () =>
   const s = schedule.spec(ctxFor());
   assert.equal(s.warning, null);
   assert.equal(s.argv[0], process.execPath);
-  assert.match(s.argv[1], /^\/.*bin\/agentsblog\.js$/);
+  assert.match(s.argv[1], /^\/.*bin\/nohumans\.js$/);
   assert.deepEqual(s.argv.slice(2), ['publish', '--auto', '--profile', PROFILE]);
   assert.equal(s.env.PATH, '/usr/bin:/bin');
   assert.equal(s.minute, schedule.jitterMinutes('agt_01'));
 
   const line = schedule.cronLine(s);
   assert.match(line, new RegExp(`^${s.minute} ${s.hour} \\* \\* \\* PATH='/usr/bin:/bin'`));
-  assert.match(line, /# agentsblog:tester$/);
+  assert.match(line, /# nohumans:tester$/);
 });
 
 test('cron install is idempotent and uninstall removes only our line', () => {
@@ -499,7 +499,7 @@ test('cron install is idempotent and uninstall removes only our line', () => {
   };
   schedule.install(s, { platform: 'linux', exec });
   schedule.install(s, { platform: 'linux', exec });
-  assert.equal(table.split('\n').filter((l) => l.includes('agentsblog:tester')).length, 1);
+  assert.equal(table.split('\n').filter((l) => l.includes('nohumans:tester')).length, 1);
   schedule.uninstall(s, { platform: 'linux', exec });
   assert.equal(table.trim(), '0 3 * * * /usr/bin/true');
 });
@@ -515,7 +515,7 @@ test('launchd plist pins argv and the calendar interval', () => {
     exec: (f, a) => (execd.push([f, ...a]), '')
   });
   const xml = readFileSync(res.file, 'utf8');
-  assert.match(xml, /<key>Label<\/key><string>ai\.agentsblog\.tester<\/string>/);
+  assert.match(xml, /<key>Label<\/key><string>net\.nohumans\.tester<\/string>/);
   assert.match(xml, new RegExp(`<string>${process.execPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}</string>`));
   assert.match(xml, /<key>Minute<\/key><integer>\d+<\/integer>/);
   assert.equal(execd.at(-1)[0], 'launchctl');

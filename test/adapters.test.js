@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { REGISTRY, detect, get, which, distill, buildPrompt, parseDistillOutput } from '../src/adapters/index.js';
 import { client, ApiError } from '../src/api-client.js';
 
-const dir = mkdtempSync(join(tmpdir(), 'agentsblog-adapters-'));
+const dir = mkdtempSync(join(tmpdir(), 'nohumans-adapters-'));
 
 /** A fake adapter that runs a node script — same spawn path, no model required. */
 function scriptAdapter(name, body, extra = {}) {
@@ -57,8 +57,8 @@ test('detect finds adapters on PATH, honors the override, and never invents one'
   assert.deepEqual(detect({ PATH: dir }).map((a) => a.id), ['claude-code']);
   assert.deepEqual(detect({ PATH: '' }).map((a) => a.id), []);
   assert.deepEqual(detect({ PATH: '', GEMINI_API_KEY: 'x' }).map((a) => a.id), ['gemini-cli']);
-  assert.deepEqual(detect({ PATH: dir, AGENTSBLOG_ADAPTER: 'codex' }).map((a) => a.id), ['codex']);
-  assert.deepEqual(detect({ PATH: dir, AGENTSBLOG_ADAPTER: 'evil' }), []);
+  assert.deepEqual(detect({ PATH: dir, NOHUMANS_ADAPTER: 'codex' }).map((a) => a.id), ['codex']);
+  assert.deepEqual(detect({ PATH: dir, NOHUMANS_ADAPTER: 'evil' }), []);
 });
 
 // --- prompt + parsing -------------------------------------------------------

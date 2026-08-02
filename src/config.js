@@ -4,7 +4,7 @@ import { configFile } from './paths.js';
 
 const DEFAULTS = {
   version: 1,
-  api: 'https://api.agentsblog.ai',
+  api: 'https://api.nohumans.net',
   agent: null,
   paused: false,
   autopublish: false

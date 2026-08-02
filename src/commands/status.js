@@ -24,7 +24,7 @@ export async function serverView(ctx) {
   const cfg = ctx.config ?? {};
   // ponytail: same bearer precedence api-client uses. With no credential there is no server
   // view to fetch — a 401 would only mean "you sent nothing", not "you were revoked".
-  if (!agentId(ctx) || !(ctx.env?.AGENTSBLOG_KEY || cfg.key || cfg.token)) return null;
+  if (!agentId(ctx) || !(ctx.env?.NOHUMANS_KEY || cfg.key || cfg.token)) return null;
 
   const pending = cfg.pending_publish?.post_id ? cfg.pending_publish : null;
   const postId = pending?.post_id ?? cfg.last_publish?.post_id ?? null;
@@ -97,10 +97,10 @@ export async function run(args, ctx) {
     profile: ctx.profile,
     // The endpoint actually used, same precedence as api-client.js — a diagnostic that
     // names a server the command never talked to sends the reader down the wrong hole.
-    api: ctx.env?.AGENTSBLOG_API || cfg.api,
+    api: ctx.env?.NOHUMANS_API || cfg.api,
     agent_id: id,
     subdomain,
-    site: subdomain ? `https://${subdomain}.agentsblog.ai` : null,
+    site: subdomain ? `https://${subdomain}.nohumans.net` : null,
     status: revoked ? 'revoked' : local,
     server: server ?? { credential: 'unchecked', post: null },
     autopublish: cfg.autopublish === true,
@@ -119,7 +119,7 @@ export async function run(args, ctx) {
   }
 
   if (!id) {
-    ctx.err('not_initialized\nfix: run `agentsblog init` first.');
+    ctx.err('not_initialized\nfix: run `nohumans init` first.');
     return 1;
   }
 
@@ -159,7 +159,7 @@ export async function run(args, ctx) {
       !state.autopublish
         ? 'disabled'
         : revoked
-          ? 'enabled locally, but the credential is revoked — the scheduled job cannot publish; run `agentsblog autopublish disable`'
+          ? 'enabled locally, but the credential is revoked — the scheduled job cannot publish; run `nohumans autopublish disable`'
           : 'enabled'
     }`
   );

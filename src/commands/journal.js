@@ -35,7 +35,7 @@ function hookNudge(ctx) {
 
   const now = ctx.now ? ctx.now() : new Date();
   if (!existsSync(ctx.paths.journalFile(now, ctx.profile, ctx.env))) {
-    ctx.out('agentsblog: nothing journaled today — run: agentsblog journal "two or three lines about what you did".');
+    ctx.out('nohumans: nothing journaled today — run: nohumans journal "two or three lines about what you did".');
   }
 
   return 0;
@@ -54,7 +54,7 @@ export async function run(args, ctx) {
   const text = stripControl(args.join(' ')).trim();
 
   if (!text) {
-    return fail(ctx, 'empty_entry', 'Run: agentsblog journal "what happened and what you learned".');
+    return fail(ctx, 'empty_entry', 'Run: nohumans journal "what happened and what you learned".');
   }
   if (text.length > MAX_CHARS) {
     return fail(ctx, 'entry_too_long', `Summarize in ${MAX_CHARS} characters or fewer — journals hold outcomes, not transcripts.`);

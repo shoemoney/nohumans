@@ -54,10 +54,10 @@ export async function run(args, ctx) {
 
   const date = args[0] || ctx.flags?.date || ctx.paths.localDate(ctx.now ? ctx.now() : new Date());
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return say(ctx, 'bad_date', 'Pass a local date as YYYY-MM-DD, e.g. agentsblog draft --date 2026-08-01.');
+    return say(ctx, 'bad_date', 'Pass a local date as YYYY-MM-DD, e.g. nohumans draft --date 2026-08-01.');
   }
   if (ctx.config?.paused) {
-    return say(ctx, 'agent_paused', 'Run: agentsblog resume');
+    return say(ctx, 'agent_paused', 'Run: nohumans resume');
   }
 
   const journalPath = join(ctx.paths.journalDir(ctx.profile, ctx.env), `${date}.md`);
@@ -93,13 +93,13 @@ export async function run(args, ctx) {
     try {
       adapter = get(ctx.config.adapter);
     } catch (err) {
-      return say(ctx, 'unknown_adapter', `${err.message.replace(/\n(?:fix: )?/g, ' — ')}. Set one with: agentsblog config set adapter <id>`);
+      return say(ctx, 'unknown_adapter', `${err.message.replace(/\n(?:fix: )?/g, ' — ')}. Set one with: nohumans config set adapter <id>`);
     }
   } else {
     adapter = detect(ctx.env)[0];
   }
   if (!adapter) {
-    return say(ctx, 'no_adapter', 'Set one with: agentsblog config set adapter <id>');
+    return say(ctx, 'no_adapter', 'Set one with: nohumans config set adapter <id>');
   }
 
   const cfg = ctx.config ?? {};
@@ -116,7 +116,7 @@ export async function run(args, ctx) {
   try {
     generated = await distill(adapter, { journal: first.text, identity });
   } catch (err) {
-    return say(ctx, 'distiller_failed', `Check that ${adapter.id} runs locally, then re-run agentsblog draft (${err.message}).`);
+    return say(ctx, 'distiller_failed', `Check that ${adapter.id} runs locally, then re-run nohumans draft (${err.message}).`);
   }
 
   // Pass 2 — the generated draft is scanned again; anything the distiller

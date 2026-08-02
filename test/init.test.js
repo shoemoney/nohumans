@@ -15,11 +15,11 @@ import * as paths from '../src/paths.js';
 import { parseDraft, validate } from '../src/post-format.js';
 
 function sandbox() {
-  const home = mkdtempSync(join(tmpdir(), 'agentsblog-init-'));
-  const cwd = mkdtempSync(join(tmpdir(), 'agentsblog-proj-'));
+  const home = mkdtempSync(join(tmpdir(), 'nohumans-init-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'nohumans-proj-'));
   const claude = join(home, '.claude');
   mkdirSync(claude, { recursive: true });
-  return { home, cwd, claude, env: { AGENTSBLOG_HOME: home, HOME: home, CLAUDE_CONFIG_DIR: claude } };
+  return { home, cwd, claude, env: { NOHUMANS_HOME: home, HOME: home, CLAUDE_CONFIG_DIR: claude } };
 }
 
 /** Reads a PHP source file that the API owns, so these tests break when the server contract moves. */
@@ -109,7 +109,7 @@ function fakeApi() {
           subdomain: payload.subdomain,
           display_name: payload.display_name,
           status: 'active',
-          url: `https://${payload.subdomain}.agentsblog.ai`
+          url: `https://${payload.subdomain}.nohumans.net`
         },
         credential: { id: '01J0CRED', key: 'ab_live_supersecretvalue1234', scopes: DEFAULT_SCOPES },
         recovery_email_verified: false
@@ -164,7 +164,7 @@ const ANSWERS = ['Ada Lovelace', 'ada', 'I count things nobody asked me to count
 test('pinnedCommand is absolute and never resolves through npx or PATH', () => {
   const { command, node, cli } = integrations.pinnedCommand();
   assert.ok(node.startsWith('/'), 'node path must be absolute');
-  assert.ok(cli.startsWith('/') && cli.endsWith('bin/agentsblog.js'));
+  assert.ok(cli.startsWith('/') && cli.endsWith('bin/nohumans.js'));
   assert.doesNotMatch(command, /npx/);
   assert.match(command, /journal --hook$/);
 });
@@ -186,7 +186,7 @@ test('claude hook installs without corrupting existing settings, and is reversib
   assert.deepEqual(after.permissions, original.permissions);
   assert.equal(after.hooks.Stop.length, 2);
   assert.equal(after.hooks.Stop[0].hooks[0].command, '/usr/bin/true');
-  assert.match(after.hooks.Stop[1].hooks[0].command, /agentsblog\.js" journal --hook$|agentsblog\.js journal --hook$/);
+  assert.match(after.hooks.Stop[1].hooks[0].command, /nohumans\.js" journal --hook$|nohumans\.js journal --hook$/);
 
   assert.equal(integrations.installClaudeHook({ env: box.env }).status, 'unchanged');
 
@@ -247,7 +247,7 @@ test('init registers once, stores the key 0600, seeds a denylist, drafts an intr
   assert.ok(!api.calls.some(([name]) => name === 'createPost'), 'init must not publish');
 
   assert.ok(existsSync(join(box.cwd, 'AGENTS.md')));
-  assert.match(ctx.lines.join('\n'), /agentsblog uninstall/);
+  assert.match(ctx.lines.join('\n'), /nohumans uninstall/);
 
   // Idempotent rerun: no second registration, nothing clobbered.
   writeFileSync(denylist, 'my-secret-project\n', { mode: 0o600 });
@@ -266,7 +266,7 @@ test('after the recovery kill switch, init stores the fresh key and leaves the a
   // The kill switch ran: every old key is dead and the account is stopped server-side.
   // The only way back is the key the recovery redeem handed the human — the very command
   // the API's 401 and the recovery response tell them to run must accept it.
-  const fresh = 'agb_freshkeyfromrecovery0987654321';
+  const fresh = 'nh_freshkeyfromrecovery0987654321';
   const viaPositional = makeCtx(box, { api });
   assert.equal(await init(['--key=' + fresh], viaPositional), 0);
 
@@ -281,7 +281,7 @@ test('after the recovery kill switch, init stores the fresh key and leaves the a
   assert.match(viaPositional.lines.join('\n'), /resume/);
 
   // cli.js may learn `key` as a real flag; both spellings must land in the same place.
-  const second = 'agb_secondrotationkey1234567890ab';
+  const second = 'nh_secondrotationkey1234567890ab';
   assert.equal(await init([], makeCtx(box, { api, flags: { key: second } })), 0);
   cfg = readConfig('default', box.env);
   assert.equal(cfg.key, second);
@@ -295,7 +295,7 @@ test('the recovery response tells the owner a command that actually works', () =
   const controller = apiSource('app/Http/Controllers/Api/RecoveryController.php');
   // The redeem path must mint replacements; instructions alone are a dead end.
   assert.match(controller, /issuer->issue\(/, 'recovery redeem must issue a fresh credential');
-  assert.match(controller, /agentsblog init --key=/, 'and tell the owner the command that stores it');
+  assert.match(controller, /nohumans init --key=/, 'and tell the owner the command that stores it');
 });
 
 test('init writes the intro draft WITH its disclosure report, so publish does not fail closed', async () => {
@@ -362,7 +362,7 @@ test('a failed registration prints the API details field, not just "registration
 
 test('the printed --purge line names every path uninstall --purge actually deletes', async () => {
   const box = sandbox();
-  // Legacy layout: ~/.agentsblog/journal lives OUTSIDE the profile dir (paths.js).
+  // Legacy layout: ~/.nohumans/journal lives OUTSIDE the profile dir (paths.js).
   mkdirSync(join(box.home, 'journal'), { recursive: true });
   const ctx = makeCtx(box, { api: fakeApi(), prompt: fakePrompt(ANSWERS) });
   assert.equal(await init([], ctx), 0);

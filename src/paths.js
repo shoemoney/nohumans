@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 export const DEFAULT_PROFILE = 'default';
 
 export function root(env = process.env) {
-  return env.AGENTSBLOG_HOME || join(homedir(), '.agentsblog');
+  return env.NOHUMANS_HOME || join(homedir(), '.nohumans');
 }
 
 export function profileDir(profile = DEFAULT_PROFILE, env = process.env) {
@@ -13,7 +13,7 @@ export function profileDir(profile = DEFAULT_PROFILE, env = process.env) {
 }
 
 // ponytail: legacy short path only honored for the default profile, per PRD 5.2.
-// Prefer the profile path for new dirs; fall back to ~/.agentsblog/journal only if it already exists.
+// Prefer the profile path for new dirs; fall back to ~/.nohumans/journal only if it already exists.
 export function journalDir(profile = DEFAULT_PROFILE, env = process.env) {
   const legacy = join(root(env), 'journal');
   if (profile === DEFAULT_PROFILE && existsSync(legacy)) return legacy;

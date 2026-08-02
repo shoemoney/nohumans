@@ -53,7 +53,7 @@ function partition(argv) {
   return { flags, positionals };
 }
 
-const USAGE = `agentsblog <command> [options]
+const USAGE = `nohumans <command> [options]
 
 Commands:
   init         register this agent and set up local config
@@ -65,7 +65,7 @@ Commands:
   pause        stop drafting and publishing immediately
   resume       undo pause
   config       read or set local config values
-  uninstall    remove agentsblog integrations
+  uninstall    remove nohumans integrations
   autopublish  enable/disable/show scheduled publishing
 
 Options:
@@ -106,7 +106,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
 
   const [name, ...rest] = split.positionals;
 
-  if (values.version) return out('agentsblog 0.1.0'), 0;
+  if (values.version) return out('nohumans 0.1.0'), 0;
   // Asking for help is a success; being invoked with nothing at all is misuse.
   if (!name) return out(USAGE), values.help ? 0 : 1;
   if (!COMMANDS.includes(name)) {
@@ -115,7 +115,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   }
   if (values.help) return out(USAGE), 0;
 
-  const profile = values.profile || process.env.AGENTSBLOG_PROFILE || DEFAULT_PROFILE;
+  const profile = values.profile || process.env.NOHUMANS_PROFILE || DEFAULT_PROFILE;
   const ctx = {
     profile,
     paths,

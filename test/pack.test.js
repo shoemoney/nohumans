@@ -41,7 +41,7 @@ test('the tarball ships bin/ and src/ and nothing else', () => {
   assert.deepEqual(stray, [], `these files would ship and should not: ${stray.join(', ')}`);
 
   const shipped = files.map((f) => f.path);
-  assert.ok(shipped.includes('bin/agentsblog.js'), 'the bin is missing from the tarball');
+  assert.ok(shipped.includes('bin/nohumans.js'), 'the bin is missing from the tarball');
   assert.ok(shipped.includes('README.md'), 'the npm landing page is missing from the tarball');
   assert.ok(unpackedSize < 512 * 1024, `unpacked size ${unpackedSize} looks like something crept in`);
 });
@@ -54,7 +54,7 @@ test('nothing local, private, or machine-specific ships', () => {
     [home, 'the packaging machine home directory'],
     ['192.168.', 'a private LAN address'],
     ['BEGIN OPENSSH PRIVATE KEY', 'a private key'],
-    ['AGENTSBLOG_KEY=', 'a credential assignment']
+    ['NOHUMANS_KEY=', 'a credential assignment']
   ];
 
   for (const { path } of packedFiles().files) {
@@ -66,13 +66,13 @@ test('nothing local, private, or machine-specific ships', () => {
 });
 
 test('the bin is executable and the version is not forked across files', () => {
-  assert.ok(statSync(join(ROOT, 'bin/agentsblog.js')).mode & 0o111, 'bin/agentsblog.js is not executable');
+  assert.ok(statSync(join(ROOT, 'bin/nohumans.js')).mode & 0o111, 'bin/nohumans.js is not executable');
 
   // Both strings are hardcoded (no runtime package.json read), so pin them here.
   const cli = readFileSync(join(ROOT, 'src/cli.js'), 'utf8');
   const api = readFileSync(join(ROOT, 'src/api-client.js'), 'utf8');
-  assert.ok(cli.includes(`agentsblog ${pkg.version}`), `--version does not print ${pkg.version}`);
-  assert.ok(api.includes(`agentsblog-cli/${pkg.version}`), `the user-agent does not say ${pkg.version}`);
+  assert.ok(cli.includes(`nohumans ${pkg.version}`), `--version does not print ${pkg.version}`);
+  assert.ok(api.includes(`nohumans-cli/${pkg.version}`), `the user-agent does not say ${pkg.version}`);
 });
 
 test('the npm landing page promises nothing that does not work today', () => {
@@ -90,7 +90,7 @@ test('the npm landing page promises nothing that does not work today', () => {
   const install = readme.slice(readme.indexOf('## 📦 Install'), readme.indexOf('## ⚡ Quickstart'));
   assert.ok(install.length > 0, 'the README has no Install section');
   assert.ok(/not published/i.test(install), 'the Install section must say the package is not published');
-  assert.ok(install.includes('node bin/agentsblog.js'), 'the Install section must give the run-from-source path');
+  assert.ok(install.includes('node bin/nohumans.js'), 'the Install section must give the run-from-source path');
 
   for (const block of install.match(/```[\s\S]*?```/g) ?? []) {
     assert.ok(!/^\s*(npm i(nstall)?|npx)\b/m.test(block), `Install shows a command that cannot work:\n${block}`);

@@ -31,7 +31,7 @@ export async function setPaused(ctx, paused) {
         `server ${verb.slice(0, -1)} failed: ${detail}\n` +
           (paused
             ? 'fix: this machine is paused, but the site is not. Use the recovery-email link to pause and revoke credentials.'
-            : 'fix: this machine stays paused. Clear the hold with the server, then run `agentsblog resume` again.')
+            : 'fix: this machine stays paused. Clear the hold with the server, then run `nohumans resume` again.')
       );
     }
   }

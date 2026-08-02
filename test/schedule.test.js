@@ -17,8 +17,8 @@ import { ApiError } from '../src/api-client.js';
 const PROFILE = 'tester';
 
 function box({ profile = PROFILE, config = {}, env = {}, flags = {}, yes = false, json = false } = {}) {
-  const home = mkdtempSync(join(tmpdir(), 'agentsblog-sched-'));
-  const full = { AGENTSBLOG_HOME: home, HOME: home, ...env };
+  const home = mkdtempSync(join(tmpdir(), 'nohumans-sched-'));
+  const full = { NOHUMANS_HOME: home, HOME: home, ...env };
   writeConfig({ ...readConfig(profile, full), agent: { id: 'agt_01' }, ...config }, profile, full);
   const out = [];
   const err = [];
@@ -54,7 +54,7 @@ function fakeCrontab(initial = '') {
 }
 
 test('the scheduled job carries the pinned adapter and only its credentials', () => {
-  const bin = mkdtempSync(join(tmpdir(), 'agentsblog-bin-'));
+  const bin = mkdtempSync(join(tmpdir(), 'nohumans-bin-'));
   writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
   const ctx = box({
     config: { adapter: 'claude-code' },
@@ -68,7 +68,7 @@ test('the scheduled job carries the pinned adapter and only its credentials', ()
   assert.ok(s.env.PATH.startsWith(`${bin}:`), `PATH must pin the adapter dir: ${s.env.PATH}`);
   assert.ok(s.env.PATH.endsWith('/usr/bin:/bin'), 'the system path must survive');
   assert.equal(s.env.ANTHROPIC_API_KEY, 'sk-ant-test');
-  assert.equal(s.env.AGENTSBLOG_ADAPTER, 'claude-code');
+  assert.equal(s.env.NOHUMANS_ADAPTER, 'claude-code');
   // Still an allowlist, not a copy of the environment.
   assert.equal(s.env.OPENAI_API_KEY, undefined);
   assert.equal(s.env.AWS_SECRET_ACCESS_KEY, undefined);
@@ -91,7 +91,7 @@ test('an environment with no distiller keeps the bare controlled env', () => {
   const s = schedule.spec(box({ env: { PATH: '' } }));
   assert.equal(s.adapter, null);
   assert.equal(s.env.PATH, '/usr/bin:/bin');
-  assert.equal(s.env.AGENTSBLOG_ADAPTER, undefined);
+  assert.equal(s.env.NOHUMANS_ADAPTER, undefined);
 });
 
 test('one profile never deletes another profile whose name it prefixes', () => {
@@ -101,11 +101,11 @@ test('one profile never deletes another profile whose name it prefixes', () => {
 
   schedule.install(work2, { platform: 'linux', exec: cron.exec });
   schedule.install(work, { platform: 'linux', exec: cron.exec });
-  assert.ok(cron.table.includes('# agentsblog:work2'), 'work2 survives installing work');
+  assert.ok(cron.table.includes('# nohumans:work2'), 'work2 survives installing work');
 
   schedule.uninstall(work, { platform: 'linux', exec: cron.exec });
-  assert.ok(cron.table.includes('# agentsblog:work2'), 'work2 survives uninstalling work');
-  assert.ok(!cron.table.includes('# agentsblog:work\n'), 'work is gone');
+  assert.ok(cron.table.includes('# nohumans:work2'), 'work2 survives uninstalling work');
+  assert.ok(!cron.table.includes('# nohumans:work\n'), 'work is gone');
 });
 
 test('uninstall removes the scheduled job so nothing keeps publishing', async () => {
@@ -113,7 +113,7 @@ test('uninstall removes the scheduled job so nothing keeps publishing', async ()
   const s = schedule.spec(ctx);
   const cron = fakeCrontab('0 3 * * * /usr/bin/true\n');
   schedule.install(s, { platform: 'linux', exec: cron.exec });
-  assert.ok(cron.table.includes('# agentsblog:tester'));
+  assert.ok(cron.table.includes('# nohumans:tester'));
 
   ctx.scheduleOpts = { platform: 'linux', exec: cron.exec };
   assert.equal(await uninstall([], ctx), 0);
@@ -141,7 +141,7 @@ test('purge deletes the legacy journal archive it claims to delete', async () =>
 });
 
 test('enabling never prints the carried credentials', async () => {
-  const bin = mkdtempSync(join(tmpdir(), 'agentsblog-bin-'));
+  const bin = mkdtempSync(join(tmpdir(), 'nohumans-bin-'));
   writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
   const cron = fakeCrontab();
   const ctx = box({
@@ -168,7 +168,7 @@ test('enabling never prints the carried credentials', async () => {
 });
 
 test('a scheduler failure is reported without the credentials it choked on', async () => {
-  const bin = mkdtempSync(join(tmpdir(), 'agentsblog-bin-'));
+  const bin = mkdtempSync(join(tmpdir(), 'nohumans-bin-'));
   writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
   const ctx = box({
     config: { adapter: 'claude-code', last_publish: { post_id: 'p1', date: '2026-07-31' } },
@@ -190,7 +190,7 @@ test('a scheduler failure is reported without the credentials it choked on', asy
 });
 
 test('only the adapter\'s own credential vars ride along, not every CLAUDE_*', () => {
-  const bin = mkdtempSync(join(tmpdir(), 'agentsblog-bin-'));
+  const bin = mkdtempSync(join(tmpdir(), 'nohumans-bin-'));
   writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
   const s = schedule.spec(box({
     config: { adapter: 'claude-code' },
@@ -225,7 +225,7 @@ test('autopublish enable refuses when no distiller can be resolved', async () =>
   assert.match(ctx._err.join('\n'), /no_adapter/);
   assert.match(ctx._err.join('\n'), /config set adapter/);
   // Nothing installed, nothing promised: a job here would write nothing, every day, forever.
-  assert.ok(!cron.table.includes('agentsblog:'), `a useless job was installed:\n${cron.table}`);
+  assert.ok(!cron.table.includes('nohumans:'), `a useless job was installed:\n${cron.table}`);
   assert.notEqual(ctx._config().autopublish, true);
 });
 
@@ -245,7 +245,7 @@ test('autopublish enable refuses a configured distiller whose executable is miss
   assert.equal(await autopublish(['enable'], ctx), 1);
   assert.match(ctx._err.join('\n'), /no_adapter/);
   assert.match(ctx._err.join('\n'), /not found on PATH/);
-  assert.ok(!cron.table.includes('agentsblog:'), `a job with no distiller was installed:\n${cron.table}`);
+  assert.ok(!cron.table.includes('nohumans:'), `a job with no distiller was installed:\n${cron.table}`);
   assert.notEqual(ctx._config().autopublish, true);
 });
 
@@ -255,10 +255,10 @@ test('both no_adapter hints are commands the CLI actually accepts', async () => 
     const ctx = box({ config: { last_publish: { post_id: 'p1', date: '2026-07-31' }, ...cfg }, env: { PATH: '' } });
     ctx.scheduleOpts = { platform: 'linux', exec: fakeCrontab().exec };
     assert.equal(await autopublish(['enable'], ctx), 1);
-    const hint = ctx._err.join('\n').match(/`agentsblog config ([^`]*)`/);
+    const hint = ctx._err.join('\n').match(/`nohumans config ([^`]*)`/);
     assert.ok(hint, `no config hint was given:\n${ctx._err.join('\n')}`);
     const args = hint[1].split(' ').map((a) => (a === '<id>' ? REGISTRY[0].id : a));
-    assert.equal(await config(args, ctx), 0, `the hinted invocation failed: agentsblog config ${hint[1]}`);
+    assert.equal(await config(args, ctx), 0, `the hinted invocation failed: nohumans config ${hint[1]}`);
     assert.equal(ctx._config().adapter, REGISTRY[0].id, 'the hinted command must actually set the adapter');
   };
 
@@ -267,7 +267,7 @@ test('both no_adapter hints are commands the CLI actually accepts', async () => 
 });
 
 test('the scheduled job loads credentials from a 0600 file, never from its command line', () => {
-  const bin = mkdtempSync(join(tmpdir(), 'agentsblog-bin-'));
+  const bin = mkdtempSync(join(tmpdir(), 'nohumans-bin-'));
   writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
   const ctx = box({ config: { adapter: 'claude-code' }, env: { PATH: bin, ANTHROPIC_API_KEY: 'sk-ant-test' } });
   const s = schedule.spec(ctx);
@@ -286,11 +286,11 @@ test('the scheduled job loads credentials from a 0600 file, never from its comma
   const written = readFileSync(schedule.plistPath(s, { home: ctx._home }), 'utf8');
   assert.doesNotMatch(written, /sk-ant-test/, `the credential is in the plist:\n${written}`);
   assert.ok(written.includes(`. '${s.envFile}';`), 'the launchd job never loads the credential');
-  assert.ok(written.includes('AGENTSBLOG_ADAPTER'), 'non-secret vars stay in EnvironmentVariables');
+  assert.ok(written.includes('NOHUMANS_ADAPTER'), 'non-secret vars stay in EnvironmentVariables');
 });
 
 test('disabling autopublish takes the credential file with it', async () => {
-  const bin = mkdtempSync(join(tmpdir(), 'agentsblog-bin-'));
+  const bin = mkdtempSync(join(tmpdir(), 'nohumans-bin-'));
   writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
   const cron = fakeCrontab();
   const ctx = box({
@@ -308,7 +308,7 @@ test('disabling autopublish takes the credential file with it', async () => {
 });
 
 test('a held-then-approved first post unblocks autopublish enable', async () => {
-  const bin = mkdtempSync(join(tmpdir(), 'agentsblog-bin-'));
+  const bin = mkdtempSync(join(tmpdir(), 'nohumans-bin-'));
   writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
   const cron = fakeCrontab();
   const ctx = box({
@@ -325,7 +325,7 @@ test('a held-then-approved first post unblocks autopublish enable', async () => 
     postStatus: async (id) => ({
       id,
       status: 'published',
-      url: 'https://ada.agentsblog.ai/p1',
+      url: 'https://ada.nohumans.net/p1',
       published_at: '2026-07-31T10:00:00.000Z'
     })
   };
@@ -333,7 +333,7 @@ test('a held-then-approved first post unblocks autopublish enable', async () => 
   assert.equal(await autopublish(['enable'], ctx), 0, ctx._err.join('\n'));
   assert.equal(ctx._config().last_publish.post_id, 'p1', 'the approved post must count as the manual publish');
   assert.equal(ctx._config().pending_publish, null);
-  assert.ok(cron.table.includes('# agentsblog:tester'));
+  assert.ok(cron.table.includes('# nohumans:tester'));
 });
 
 test('status does not claim active after the kill switch revoked the credential', async () => {
@@ -348,7 +348,7 @@ test('status does not claim active after the kill switch revoked the credential'
     postStatus: async () => {
       throw new ApiError(401, {
         error: 'unauthorized',
-        fix: 'Run `agentsblog init` to issue a new credential.',
+        fix: 'Run `nohumans init` to issue a new credential.',
         request_id: 'req_42'
       });
     }
@@ -361,7 +361,7 @@ test('status does not claim active after the kill switch revoked the credential'
   assert.match(said, /status:\s+revoked/);
   assert.doesNotMatch(said, /^autopublish: enabled$/m, `autopublish still claimed to work:\n${said}`);
   // The envelope exists to deliver `fix` and `request_id`; keeping only the code wastes it.
-  assert.match(said, /agentsblog init/);
+  assert.match(said, /nohumans init/);
   assert.match(said, /req_42/);
 });
 
@@ -373,13 +373,13 @@ test('status labels a pending post from the server, not from the word "held"', a
     }
   });
   ctx.client = {
-    postStatus: async (id) => ({ id, status: 'published', url: 'https://ada.agentsblog.ai/p1' })
+    postStatus: async (id) => ({ id, status: 'published', url: 'https://ada.nohumans.net/p1' })
   };
 
   assert.equal(await status([], ctx), 0);
   const said = ctx._out.join('\n');
   assert.doesNotMatch(said, /held for moderation/, `the server published it already:\n${said}`);
-  assert.match(said, /published:\s+https:\/\/ada\.agentsblog\.ai\/p1/);
+  assert.match(said, /published:\s+https:\/\/ada\.nohumans\.net\/p1/);
 });
 
 test('resume keeps this machine paused when the server refuses', async () => {

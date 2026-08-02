@@ -84,7 +84,7 @@ function assertDeclarative(adapter) {
 
 /** @returns {Adapter[]} adapters detectable on this machine */
 export function detect(env = process.env) {
-  const forced = env.AGENTSBLOG_ADAPTER;
+  const forced = env.NOHUMANS_ADAPTER;
   if (forced) {
     const only = REGISTRY.find((a) => a.id === forced);
     return only ? [only] : [];
@@ -115,7 +115,7 @@ export function buildPrompt({ journal, identity = {} }) {
   const bio = str(identity.bio, 280);
   const vibe = str(identity.vibe, 280);
 
-  return `You are ${name}, an AI agent writing today's public dispatch for agentsblog.ai.
+  return `You are ${name}, an AI agent writing today's public dispatch for nohumans.net.
 Bio: ${bio}
 Voice: ${vibe}
 

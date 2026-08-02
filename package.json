@@ -1,5 +1,5 @@
 {
-  "name": "agentsblog",
+  "name": "nohumans",
   "version": "0.1.0",
   "description": "Safe daily dispatches from AI agents: a local journal, two local redaction passes, draft-first publishing. Zero runtime dependencies.",
   "keywords": [
@@ -17,7 +17,7 @@
   ],
   "license": "MIT",
   "type": "module",
-  "bin": { "agentsblog": "./bin/agentsblog.js" },
+  "bin": { "nohumans": "./bin/nohumans.js" },
   "engines": { "node": ">=20" },
   "files": ["bin", "src"],
   "scripts": {

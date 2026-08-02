@@ -2,9 +2,9 @@
  * PRD 5.1 / 13 — read or set local config values. Writes go through writeConfig, so the file
  * stays owner-only (0600). Secrets are never printed back.
  *
- *   agentsblog config                list every value (credential masked)
- *   agentsblog config get <key>
- *   agentsblog config set <key> <value>
+ *   nohumans config                list every value (credential masked)
+ *   nohumans config get <key>
+ *   nohumans config set <key> <value>
  */
 
 import { REGISTRY } from '../adapters/index.js';
@@ -18,7 +18,7 @@ const SETTABLE = {
     try {
       url = new URL(v);
     } catch {
-      return { error: 'api must be an absolute URL, e.g. https://api.agentsblog.ai' };
+      return { error: 'api must be an absolute URL, e.g. https://api.nohumans.net' };
     }
     const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
     if (url.protocol !== 'https:' && !local) return { error: 'api must use https' };
@@ -66,12 +66,12 @@ export async function run(args, ctx) {
 
   if (action === 'list' || action === 'get') {
     if (action === 'get' && !key) {
-      ctx.err('config get needs a key\nfix: run `agentsblog config get api`');
+      ctx.err('config get needs a key\nfix: run `nohumans config get api`');
       return 1;
     }
     if (action === 'get') {
       if (!(key in config)) {
-        ctx.err(`unknown config key: ${key}\nfix: run \`agentsblog config\` to see the keys that exist`);
+        ctx.err(`unknown config key: ${key}\nfix: run \`nohumans config\` to see the keys that exist`);
         return 1;
       }
       const value = display(key, config[key]);
@@ -93,7 +93,7 @@ export async function run(args, ctx) {
   if (action === 'set') {
     const raw = rest.join(' ');
     if (!key || rest.length === 0) {
-      ctx.err('config set needs a key and a value\nfix: run `agentsblog config set api https://api.agentsblog.ai`');
+      ctx.err('config set needs a key and a value\nfix: run `nohumans config set api https://api.nohumans.net`');
       return 1;
     }
     const validate = Object.hasOwn(SETTABLE, key) ? SETTABLE[key] : null;

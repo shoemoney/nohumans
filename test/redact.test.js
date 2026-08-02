@@ -24,13 +24,13 @@ test('key=value secrets keep the key so context survives', () => {
 });
 
 test('emails, private hostnames and IPs', () => {
-  const r = redact('mailed jer@example.com from db-03.internal at 192.168.1.10 (not 127.0.0.1)');
+  const r = redact('mailed dana@example.com from db-03.internal at 203.0.113.10 (not 127.0.0.1)');
   assert.match(r.text, /mailed \[redacted:email\] from \[redacted:hostname\] at \[redacted:ip\]/);
   assert.match(r.text, /\(not 127\.0\.0\.1\)/); // loopback identifies nobody
 });
 
 test('absolute paths go, relative and URL paths stay', () => {
-  const r = redact('ran /Users/jeremy/Projects/secretco/build.sh via https://example.com/a/b and src/index.js');
+  const r = redact('ran /Users/dana/Projects/secretco/build.sh via https://example.com/a/b and src/index.js');
   assert.match(r.text, /ran \[redacted:path\] via/);
   assert.match(r.text, /https:\/\/example\.com\/a\/b/);
   assert.match(r.text, /src\/index\.js/);
@@ -41,9 +41,9 @@ test('home-relative and env-var paths are redacted, not suppressed by the ~', ()
     'Fixed the build in ~/Projects/acme-client/api today.',
     'Notes live in $HOME/Projects/acme-client/notes.md now.',
     'Notes live in ${HOME}/Projects/acme-client/notes.md now.',
-    'Pulled ~jeremy/src/acme-client/api again.',
+    'Pulled ~dana/src/acme-client/api again.',
     'Copied %USERPROFILE%\\Projects\\acme-client\\keys.txt over.',
-    'Copied C:\\Users\\jeremy\\acme-client\\keys.txt over.',
+    'Copied C:\\Users\\dana\\acme-client\\keys.txt over.',
   ]) {
     const r = redact(source);
     assert.equal(r.text.includes('acme-client'), false, source);
@@ -54,15 +54,15 @@ test('home-relative and env-var paths are redacted, not suppressed by the ~', ()
 
 test('windows, mixed-separator, UNC and WSL absolute paths are redacted', () => {
   for (const source of [
-    'Copied C:/Users/jeremy/Projects/acme-client/keys.txt over.',
-    'Copied C:\\Users\\jeremy/Projects/acme-client\\keys.txt over.',
+    'Copied C:/Users/dana/Projects/acme-client/keys.txt over.',
+    'Copied C:\\Users\\dana/Projects/acme-client\\keys.txt over.',
     'Copied \\\\fileserver\\shares\\acme-client\\keys.txt over.',
     'Copied \\\\fileserver\\shares/acme-client/keys.txt over.',
-    'Read /mnt/c/Users/jeremy/Projects/acme-client/keys.txt today.',
+    'Read /mnt/c/Users/dana/Projects/acme-client/keys.txt today.',
   ]) {
     const r = redact(source);
     assert.equal(r.text.includes('acme-client'), false, source);
-    assert.equal(r.text.includes('jeremy'), false, source);
+    assert.equal(r.text.includes('dana'), false, source);
     assert.equal(cats(r).path, 1, source);
     assert.equal(r.warned, true, source);
   }
@@ -81,7 +81,7 @@ test('drive-letter rule does not eat URLs, prose or ratios', () => {
 });
 
 test('repo locations in file://, scp-style remotes and code-host URLs are redacted', () => {
-  const file = redact('Tailed file:///Users/jeremy/Projects/acme-client/api.log.');
+  const file = redact('Tailed file:///Users/dana/Projects/acme-client/api.log.');
   assert.equal(file.text.includes('acme-client'), false);
 
   const remote = redact('Cloned git@github.com:acmeco/private-repo.git this morning.');
@@ -180,7 +180,7 @@ test('oversize input is truncated and flagged', () => {
 });
 
 test('redaction is stable: a second run finds nothing new', () => {
-  const source = 'jer@example.com pushed /srv/acme/app to 10.0.0.4 with ghp_abcdefghijklmnopqrstuvwxyz012345';
+  const source = 'dana@example.com pushed /srv/acme/app to 10.0.0.4 with ghp_abcdefghijklmnopqrstuvwxyz012345';
   const once = redact(source, ['acme']);
   const twice = redact(once.text, ['acme']);
   assert.equal(twice.findings.length, 0);
@@ -189,7 +189,7 @@ test('redaction is stable: a second run finds nothing new', () => {
 });
 
 test('scanSummary is counts only', () => {
-  const summary = scanSummary(redact('jer@example.com and ops@example.com'));
+  const summary = scanSummary(redact('dana@example.com and ops@example.com'));
   assert.deepEqual(summary.categories, { email: 2 });
   assert.equal(typeof summary.passes, 'number');
   assert.equal(JSON.stringify(summary).includes('example.com'), false);
@@ -197,33 +197,33 @@ test('scanSummary is counts only', () => {
 });
 
 test('seedDenylist reads identity without following symlinks or throwing', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agentsblog-seed-'));
+  const dir = mkdtempSync(join(tmpdir(), 'nohumans-seed-'));
   const home = join(dir, 'home');
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(home);
   writeFileSync(join(dir, 'package.json'), JSON.stringify({
     name: '@acmeco/private-tool',
-    author: { name: 'Jeremy Example', email: 'jer@example.com' },
+    author: { name: 'Dana Rivera', email: 'dana@example.com' },
   }));
   writeFileSync(join(dir, '.git', 'config'), '[remote "origin"]\n\turl = git@example.com:acmeco/private-tool.git\n');
   writeFileSync(join(dir, 'secrets.txt'), 'name = Should Not Be Read\n');
   symlinkSync(join(dir, 'secrets.txt'), join(home, '.gitconfig'));
 
-  const terms = await seedDenylist({ env: { HOME: home, USER: 'jeremy' }, cwd: dir });
-  assert.ok(terms.includes('jeremy'));
+  const terms = await seedDenylist({ env: { HOME: home, USER: 'dana' }, cwd: dir });
+  assert.ok(terms.includes('dana'));
   assert.ok(terms.includes('@acmeco/private-tool'));
-  assert.ok(terms.includes('Jeremy Example'));
+  assert.ok(terms.includes('Dana Rivera'));
   assert.ok(terms.some((t) => t.includes('acmeco/private-tool.git')));
   assert.equal(terms.includes('Should Not Be Read'), false); // symlinked gitconfig skipped
   assert.equal(terms.some((t) => t.length < 3), false);
 
   // Seeds actually redact once fed back in.
-  const r = redact('Jeremy Example shipped @acmeco/private-tool today.', terms);
-  assert.equal(r.text.includes('Jeremy Example'), false);
+  const r = redact('Dana Rivera shipped @acmeco/private-tool today.', terms);
+  assert.equal(r.text.includes('Dana Rivera'), false);
   assert.equal(r.text.includes('acmeco'), false);
 });
 
 test('seedDenylist survives a missing cwd and empty env', async () => {
-  const terms = await seedDenylist({ env: {}, cwd: join(tmpdir(), 'agentsblog-does-not-exist') });
+  const terms = await seedDenylist({ env: {}, cwd: join(tmpdir(), 'nohumans-does-not-exist') });
   assert.ok(Array.isArray(terms));
 });

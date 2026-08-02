@@ -15,13 +15,13 @@ import { run as resume } from '../src/commands/resume.js';
 import { ApiError } from '../src/api-client.js';
 
 function makeCtx(overrides = {}) {
-  const home = mkdtempSync(join(tmpdir(), 'agentsblog-content-'));
+  const home = mkdtempSync(join(tmpdir(), 'nohumans-content-'));
   const lines = [];
   const errs = [];
   return {
     profile: 'ada',
     paths,
-    env: { AGENTSBLOG_HOME: home },
+    env: { NOHUMANS_HOME: home },
     config: {},
     flags: {},
     json: false,
@@ -172,7 +172,7 @@ test('journal refuses to follow a symlinked journal file', async () => {
 function fakeDeps(markdown, { title = 'Stale locks', hashtags = ['caching'] } = {}) {
   const redact = (text) => {
     const findings = [];
-    const out = text.replace(/Jeremy/g, () => {
+    const out = text.replace(/Dana/g, () => {
       findings.push('name');
       return '[redacted:denylist]';
     });
@@ -222,12 +222,12 @@ test('draft names an unresolvable configured adapter instead of reporting no_ada
   for (const a of REGISTRY) assert.match(body.fix, new RegExp(a.id), `valid id ${a.id} must be listed`);
   // The hint must be a command that actually exists: `config` requires the `set` action,
   // so the old `config adapter <id>` wording exits 1 with "unknown config action".
-  assert.match(body.fix, /agentsblog config set adapter <id>/);
+  assert.match(body.fix, /nohumans config set adapter <id>/);
   assert.equal(await config(['set', 'adapter', REGISTRY[0].id], ctx), 0, 'the hinted invocation must succeed');
 });
 
 test('draft redacts, rescans, and writes a local draft plus a disclosure report', async () => {
-  const ctx = makeCtx({ deps: fakeDeps(`${GOOD}\n\nJeremy said it was fine.`) });
+  const ctx = makeCtx({ deps: fakeDeps(`${GOOD}\n\nDana said it was fine.`) });
   await seedJournal(ctx, '- 09:00 Spent the morning on stale cache locks and learned why retries kept resurrecting them long after the TTL expired.\n');
 
   assert.equal(await draft([], ctx), 0);
@@ -235,7 +235,7 @@ test('draft redacts, rescans, and writes a local draft plus a disclosure report'
   const written = fmt.parseDraft(readFileSync(files.draft, 'utf8'));
   assert.equal(written.title, 'Stale locks');
   assert.deepEqual(written.hashtags, ['caching']);
-  assert.ok(!/Jeremy/.test(written.markdown), 'second scan must remove what the distiller reintroduced');
+  assert.ok(!/Dana/.test(written.markdown), 'second scan must remove what the distiller reintroduced');
 
   const report = JSON.parse(readFileSync(files.report, 'utf8'));
   assert.equal(report.scans.length, 2);
@@ -247,20 +247,20 @@ test('draft redacts, rescans, and writes a local draft plus a disclosure report'
   // preview shows categories, never the matched value
   const out = ctx.lines.join('\n');
   assert.match(out, /scan 2 {2}name=1/);
-  assert.ok(!/Jeremy/.test(out));
+  assert.ok(!/Dana/.test(out));
 });
 
 const FAT_JOURNAL =
   '- 09:00 Spent the morning on stale cache locks and learned why retries kept resurrecting them long after the TTL expired.\n';
 
 test('the second pass redacts the model-authored title, not just the body', async () => {
-  const ctx = makeCtx({ deps: fakeDeps(GOOD, { title: 'Why Jeremy kept the lock alive' }) });
+  const ctx = makeCtx({ deps: fakeDeps(GOOD, { title: 'Why Dana kept the lock alive' }) });
   await seedJournal(ctx, FAT_JOURNAL);
 
   assert.equal(await draft([], ctx), 0);
   const files = fmt.draftFiles('2026-08-01', ctx);
   const written = fmt.parseDraft(readFileSync(files.draft, 'utf8'));
-  assert.ok(!/Jeremy/.test(written.title), 'a distilled title must be redacted like the body');
+  assert.ok(!/Dana/.test(written.title), 'a distilled title must be redacted like the body');
 
   // The body is clean here, so every finding and the warned flag come from the title.
   const report = JSON.parse(readFileSync(files.report, 'utf8'));
@@ -270,10 +270,10 @@ test('the second pass redacts the model-authored title, not just the body', asyn
 });
 
 test('model-authored hashtags are scanned against the denylist and dropped', async () => {
-  const ctx = makeCtx({ deps: fakeDeps(GOOD, { hashtags: ['Jeremy', 'acmemigration', 'caching'] }) });
+  const ctx = makeCtx({ deps: fakeDeps(GOOD, { hashtags: ['Dana', 'acmemigration', 'caching'] }) });
   const file = paths.denylistFile(ctx.profile, ctx.env);
   mkdirSync(join(file, '..'), { recursive: true });
-  writeFileSync(file, '# private\nJeremy\nAcme\n');
+  writeFileSync(file, '# private\nDana\nAcme\n');
   await seedJournal(ctx, FAT_JOURNAL);
 
   assert.equal(await draft([], ctx), 0);
@@ -287,7 +287,7 @@ test('model-authored hashtags are scanned against the denylist and dropped', asy
 });
 
 test('an unreadable denylist stops the draft instead of silently skipping redaction', async () => {
-  const ctx = makeCtx({ deps: fakeDeps(`${GOOD}\n\nJeremy said it was fine.`), json: true });
+  const ctx = makeCtx({ deps: fakeDeps(`${GOOD}\n\nDana said it was fine.`), json: true });
   await seedJournal(ctx, FAT_JOURNAL);
   // A directory where the denylist should be: readable path, unreadable file (EISDIR, not ENOENT).
   mkdirSync(paths.denylistFile(ctx.profile, ctx.env), { recursive: true });
@@ -319,7 +319,7 @@ test('a paused agent does not draft', async () => {
 test('preview reports a missing draft with a fix, and renders an existing one', async () => {
   const ctx = makeCtx();
   assert.equal(await preview([], ctx), 1);
-  assert.match(ctx.errs.join('\n'), /no_draft\nfix: Run: agentsblog draft --date 2026-08-01/);
+  assert.match(ctx.errs.join('\n'), /no_draft\nfix: Run: nohumans draft --date 2026-08-01/);
 
   const files = fmt.draftFiles('2026-08-01', ctx);
   mkdirSync(files.dir, { recursive: true });
@@ -327,7 +327,7 @@ test('preview reports a missing draft with a fix, and renders an existing one', 
   assert.equal(await preview([], ctx), 0);
   const out = ctx.lines.join('\n');
   assert.match(out, /title {3}Stale locks/);
-  assert.match(out, /This draft is local\. Publish with: agentsblog publish 2026-08-01/);
+  assert.match(out, /This draft is local\. Publish with: nohumans publish 2026-08-01/);
 });
 
 function seedDraft(ctx) {
@@ -347,7 +347,7 @@ test('preview never calls an unscanned draft clean', async () => {
     source: 'init-intro',
     scans: [],
     scanned: false,
-    scan_skipped_reason: 'composed by `agentsblog init` from human-confirmed identity fields; no journal content',
+    scan_skipped_reason: 'composed by `nohumans init` from human-confirmed identity fields; no journal content',
     warnings: [],
     warned: false
   }));
@@ -368,7 +368,7 @@ test('preview says a corrupt disclosure report is unreadable, not missing', asyn
   const out = ctx.lines.join('\n');
   assert.ok(!/no disclosure report on disk/.test(out), 'a corrupt report is not a missing one');
   assert.match(out, /disclosure report is unreadable/);
-  assert.match(out, /agentsblog draft --date 2026-08-01/);
+  assert.match(out, /nohumans draft --date 2026-08-01/);
 });
 
 test('preview rejects a malformed date instead of guessing', async () => {
@@ -382,14 +382,14 @@ test('preview rejects a malformed date instead of guessing', async () => {
 test('config masks every field that can act as a credential', async () => {
   const ctx = makeCtx();
   // api-client.js accepts `token` as the bearer credential exactly like `key`.
-  writeConfig({ api: 'https://api.agentsblog.ai', key: 'agk_live_aaaa1111', token: 'agt_live_bbbb2222' }, ctx.profile, ctx.env);
+  writeConfig({ api: 'https://api.nohumans.net', key: 'agk_live_aaaa1111', token: 'agt_live_bbbb2222' }, ctx.profile, ctx.env);
 
   assert.equal(await config([], ctx), 0);
   const listed = ctx.lines.join('\n');
   assert.ok(!listed.includes('agt_live_bbbb2222'), 'token is a bearer credential and must never be printed');
   assert.ok(!listed.includes('agk_live_aaaa1111'));
   assert.match(listed, /token = \*{8}2222/);
-  assert.match(listed, /api = https:\/\/api\.agentsblog\.ai/, 'non-secrets stay readable');
+  assert.match(listed, /api = https:\/\/api\.nohumans\.net/, 'non-secrets stay readable');
 
   ctx.lines.length = 0;
   assert.equal(await config(['get', 'token'], ctx), 0);
