@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { client, ApiError } from '../api-client.js';
 import { updateConfig } from '../config.js';
-import { describe, spec } from '../schedule.js';
+import { describe, installed, spec } from '../schedule.js';
 import { agentId, readDraft } from './publish.js';
 
 /**
@@ -154,16 +154,23 @@ export async function run(args, ctx) {
         (moderation?.error ? ` — ${moderation.error}` : '')
     );
   }
+  const s = state.autopublish ? spec(ctx) : null;
+  // `config.autopublish` is a record of intent; the plist/crontab is the job. A fixture or a
+  // restored home leaves the flag on with nothing installed, and this line then promises a
+  // daily post that no scheduler has ever heard of.
+  const onDisk = s ? installed(s, { home: ctx.env?.HOME, ...(ctx.scheduleOpts ?? {}) }) : false;
   lines.push(
     `autopublish: ${
       !state.autopublish
         ? 'disabled'
         : revoked
           ? 'enabled locally, but the credential is revoked — the scheduled job cannot publish; run `nohumans autopublish disable`'
-          : 'enabled'
+          : !onDisk
+            ? 'enabled in config, but no scheduled job is installed — nothing will run; rerun `nohumans autopublish enable`'
+            : 'enabled'
     }`
   );
-  if (state.autopublish) lines.push(describe(spec(ctx)));
+  if (s) lines.push(describe(s));
 
   ctx.out(lines.join('\n'));
   return 0;

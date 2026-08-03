@@ -3,8 +3,9 @@
 // Owned by unit CLI-PUBLISH.
 
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdirSync, writeFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as adapters from './adapters/index.js';
 import { pinnedCommand } from './integrations.js';
@@ -22,7 +23,8 @@ export function jitterMinutes(agentId, span = JITTER_SPAN) {
  * @param {import('./cli.js').Ctx} ctx
  * @returns {{profile: string, label: string, hour: number, minute: number,
  *            argv: string[], env: Record<string,string>, log: string, envFile: string,
- *            adapter: {id: string, exe: string|null}|null, warning: string|null}}
+ *            adapter: {id: string, bin: string, exe: string|null, ephemeral: boolean}|null,
+ *            warning: string|null}}
  */
 export function spec(ctx) {
   const agentId = agentKey(ctx);
@@ -37,10 +39,11 @@ export function spec(ctx) {
   } catch (err) {
     warning = err.message;
   }
+  node = stableNode(ctx.env ?? {}, node);
   const env = { PATH: '/usr/bin:/bin' };
   if (ctx.env?.HOME) env.HOME = ctx.env.HOME;
   if (ctx.env?.NOHUMANS_HOME) env.NOHUMANS_HOME = ctx.env.NOHUMANS_HOME;
-  const adapter = pinAdapter(env, ctx.env ?? {}, ctx.config?.adapter);
+  const adapter = pinAdapter(env, ctx.env ?? {}, ctx.config ?? {});
   return {
     profile: ctx.profile,
     label: `net.nohumans.${ctx.profile}`,
@@ -63,12 +66,12 @@ export function spec(ctx) {
  * distiller and no credentials and can never produce a post. Still an allowlist — the
  * adapter's own `envAllow` rules, never a copy of process.env — and the resolved
  * executable's directory is pinned ahead of the system path (PRD §13).
- * @returns {{id: string, exe: string|null}|null}
+ * @returns {{id: string, bin: string, exe: string|null, ephemeral: boolean}|null}
  */
-function pinAdapter(env, source, configured) {
+function pinAdapter(env, source, config) {
   let adapter = null;
   try {
-    adapter = (configured ? adapters.get(configured) : adapters.detect(source)[0]) ?? null;
+    adapter = (config.adapter ? adapters.get(config.adapter) : adapters.detect(source)[0]) ?? null;
   } catch {
     return null; // unknown configured id; `nohumans config set adapter <id>` reports it
   }
@@ -82,7 +85,103 @@ function pinAdapter(env, source, configured) {
   for (const key of adapter.env ?? []) {
     if (source[key]) env[key] = source[key];
   }
-  return { id: adapter.id, exe };
+  // ...plus the exact names the owner declared in `config set adapter_env`. `draft` already
+  // hands these to the distiller (draft.js -> childEnv), so without them the interactive path
+  // authenticates and the scheduled one exits 1 with no message, every day, forever. Same
+  // exact-name rule as childEnv, and they land in the 0600 env file like every other secret.
+  for (const key of Array.isArray(config.adapter_env) ? config.adapter_env : []) {
+    // Never a name the job spec already owns: `adapter_env PATH` would otherwise undo the
+    // pinned adapter directory, and `adapter_env NOHUMANS_ADAPTER` the pinned adapter id —
+    // both of them PRD §13 controls, silently voided by a knob that validates the name as
+    // well-formed. config.js accepts PATH and HOME as valid variable names, so this is the
+    // only place that can refuse them.
+    if (SHOWN_ENV.has(key)) continue;
+    if (typeof key === 'string' && /^[A-Z][A-Z0-9_]*$/.test(key) && source[key]) env[key] = source[key];
+  }
+  return { id: adapter.id, bin: adapter.bin, exe, ephemeral: isEphemeral(exe, source) };
+}
+
+const realpath = (p) => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return String(p);
+  }
+};
+
+/**
+ * True when the resolved executable lives inside the temp root. cmux and other agent harnesses
+ * put CLI shims there and the OS reaps the directory, so pinning it into a job that outlives the
+ * shell schedules a guaranteed ENOENT months from now.
+ *
+ * Falls back to the platform temp dir when the enabling environment declares no TMPDIR — that is
+ * the normal case in a Linux login shell and in `ssh host 'nohumans autopublish enable'`, i.e. on
+ * the platform where the job runs from cron, so a TMPDIR-only check is off exactly where it is
+ * needed. Both sides are realpath'd because macOS /var is a symlink to /private/var and a raw
+ * prefix compare misses the shim whenever the two paths disagree about which spelling to use.
+ */
+function isEphemeral(exe, source) {
+  if (!exe) return false;
+  const root = realpath(source.TMPDIR || tmpdir()).replace(/\/+$/, '');
+  return root !== '' && realpath(exe).startsWith(`${root}/`);
+}
+
+/**
+ * Homebrew's `node` is a symlink into `Cellar/<version>/bin/node` and `process.execPath` is the
+ * resolved versioned path — which `brew upgrade` (and the cleanup it runs every 30 days) deletes.
+ * The job then dies at 09:xx with exit 127 forever, and in the no-credentials case launchd's own
+ * spawn fails so nothing at all reaches the log. If PATH holds a `node` that resolves to the same
+ * binary by an unversioned path, pin that instead: it survives the upgrade.
+ * ponytail: only the identical-binary case. A different node on PATH is not ours to substitute.
+ */
+function stableNode(source, exe) {
+  const found = adapters.which('node', source);
+  if (!found || found === exe) return exe;
+  return realpath(found) === realpath(exe) ? found : exe;
+}
+
+/**
+ * Run the pinned distiller once, with the exact environment the scheduled job will hand it.
+ *
+ * Every way an unattended run dies looks identical from here — a shim that will be reaped, a
+ * gateway variable the job does not carry, a wrapper only the interactive shell has, a CLI that
+ * was never logged in — and all of them are invisible until 09:xx on some morning nobody is
+ * watching. One real run at enable time covers all of them, including the ones nobody has thought
+ * of yet, which is more than any list of variable names can do.
+ * @param {ReturnType<typeof spec>} s
+ * @returns {Promise<{ok: boolean, detail: string}>}
+ */
+export function probe(s, opts = {}) {
+  const timeoutMs = opts.probeTimeoutMs ?? 90000;
+  let args;
+  try {
+    const adapter = adapters.get(s.adapter.id);
+    args = adapters.assertDeclarative(adapter).argv.slice(1);
+  } catch (err) {
+    return Promise.resolve({ ok: false, detail: err.message });
+  }
+  return new Promise((resolve) => {
+    const child = spawn(s.adapter.exe, args, {
+      env: { ...s.env, TERM: 'dumb', NO_COLOR: '1' },
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    let out = '';
+    const take = (chunk) => {
+      if (out.length < 4096) out += String(chunk);
+    };
+    child.stdout.on('data', take);
+    child.stderr.on('data', take);
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+    const done = (ok, detail) => {
+      clearTimeout(timer);
+      resolve({ ok, detail: detail.trim().split('\n').slice(0, 6).join('\n') });
+    };
+    child.on('error', (err) => done(false, err.message));
+    child.on('close', (code, signal) =>
+      done(code === 0, signal ? `no answer in ${timeoutMs / 1000}s` : `${out || `exit ${code}`}`));
+    child.stdin.on('error', () => {}); // a distiller that ignores stdin closes it first
+    child.stdin.end('Reply with exactly: PONG\n');
+  });
 }
 
 // Only these are safe to echo; the rest of the carried env is credentials.
@@ -125,7 +224,13 @@ export function describe(s, platform = process.platform) {
     '            never falls back to transcripts, never publishes while paused.',
     'emergency:  nohumans pause          stop everything now',
     '            nohumans autopublish disable   remove the scheduled job',
-    '            recovery email link       pause and revoke credentials without the CLI'
+    '            recovery email link       pause and revoke credentials without the CLI',
+    '',
+    // Otherwise this reads as a description of the installed job, and it is not: an owner who
+    // runs `status` from a different shell is shown that shell's PATH and distiller.
+    'note:       recomputed from this shell — the installed job keeps whatever it was',
+    '            enabled with. Rerun `nohumans autopublish enable` after changing',
+    '            `adapter`, `adapter_env` or `autopublish_hour`.'
   ].join('\n');
 }
 
@@ -141,6 +246,21 @@ export function install(s, opts = {}) {
   mkdirSync(dirname(s.log), { recursive: true, mode: 0o700 });
   writeEnvFile(s);
   return platform === 'darwin' ? installLaunchd(s, opts) : installCron(s, opts);
+}
+
+/**
+ * Whether a scheduled job for this profile is actually on disk. `config.autopublish` is only a
+ * record of what was asked for: a profile fixture, a restored home directory or a hand-removed
+ * plist all leave it saying `true` with nothing installed, and `status` then reports a job that
+ * cannot run because it does not exist.
+ * @param {ReturnType<typeof spec>} s
+ */
+export function installed(s, opts = {}) {
+  const platform = opts.platform ?? process.platform;
+  if (platform === 'darwin') return existsSync(plistPath(s, opts));
+  return currentCrontab(opts.exec ?? defaultExec)
+    .split('\n')
+    .some((l) => l.trimEnd().endsWith(marker(s)));
 }
 
 export function uninstall(s, opts = {}) {

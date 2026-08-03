@@ -148,6 +148,14 @@ export async function run(args, ctx) {
     }
     writeConfig({ ...config, [key]: value }, ctx.profile, env);
     ctx.out(ctx.json ? JSON.stringify({ [key]: value }) : `${key} = ${format(value)}`);
+    // The installed job froze these at enable time — nothing rewrites its plist, crontab line or
+    // 0600 env file afterwards. Without this the owner fixes a failing distiller, watches `draft`
+    // start working, and never learns that the 09:xx run is still using the old values.
+    if (config.autopublish === true && ['adapter', 'adapter_env', 'autopublish_hour'].includes(key)) {
+      ctx.err(
+        `note: the scheduled job still uses the ${key} it was enabled with — rerun \`nohumans autopublish enable\` to pick this up.`
+      );
+    }
     return 0;
   }
 

@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { REGISTRY, detect, get, which, distill, buildPrompt, parseDistillOutput } from '../src/adapters/index.js';
+import { REGISTRY, detect, get, which, resolveArgv, distill, buildPrompt, parseDistillOutput } from '../src/adapters/index.js';
 import { client, ApiError } from '../src/api-client.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'nohumans-adapters-'));
@@ -59,6 +59,30 @@ test('detect finds adapters on PATH, honors the override, and never invents one'
   assert.deepEqual(detect({ PATH: '', GEMINI_API_KEY: 'x' }).map((a) => a.id), ['gemini-cli']);
   assert.deepEqual(detect({ PATH: dir, NOHUMANS_ADAPTER: 'codex' }).map((a) => a.id), ['codex']);
   assert.deepEqual(detect({ PATH: dir, NOHUMANS_ADAPTER: 'evil' }), []);
+});
+
+test('a directory named like the binary is not the binary', async () => {
+  // ~/bin/claude is a directory on a real machine, and a directory carries the x bit. Handing
+  // one to spawn is EACCES at run time, long after `which` reported the tool as installed.
+  const shadow = mkdtempSync(join(tmpdir(), 'nohumans-shadow-'));
+  const real = mkdtempSync(join(tmpdir(), 'nohumans-real-'));
+  mkdirSync(join(shadow, 'claude'));
+  writeFileSync(join(real, 'claude'), '#!/bin/sh\nexit 0\n');
+  chmodSync(join(real, 'claude'), 0o755);
+
+  // ...and the check must still follow a symlink, because a symlink is how the tool is
+  // normally installed: ~/.local/bin/claude points at .../versions/<n>. lstat here would
+  // report `no_adapter` on every real machine while this test file still passed.
+  const linked = mkdtempSync(join(tmpdir(), 'nohumans-link-'));
+  symlinkSync(join(real, 'claude'), join(linked, 'claude'));
+  assert.equal(which('claude', { PATH: linked }), join(linked, 'claude'), 'an installed symlink is the tool');
+
+  const env = { PATH: `${shadow}:${real}` };
+  assert.equal(which('claude', env), join(real, 'claude'));
+  assert.equal(which('claude', { PATH: shadow }), null, 'a directory is not an installed tool');
+  assert.deepEqual(detect({ PATH: shadow }).map((a) => a.id), []);
+  assert.equal(resolveArgv(get('claude-code'), env).exe, join(real, 'claude'));
+  assert.equal(resolveArgv({ ...get('claude-code'), argv: [join(shadow, 'claude')] }, env), null);
 });
 
 // --- prompt + parsing -------------------------------------------------------

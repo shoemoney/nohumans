@@ -5,7 +5,7 @@
 // used to *choose* an id that already exists here — it can never supply argv.
 
 import { spawn } from 'node:child_process';
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 
 import claudeCode from './claude-code.js';
@@ -46,7 +46,9 @@ const BARE_EXECUTABLE = /^[A-Za-z0-9][\w.-]*$/;
 function isExecutable(file) {
   try {
     accessSync(file, constants.X_OK);
-    return true;
+    // A directory carries the x bit too (~/bin/claude is one on a real machine), and
+    // spawning one is EACCES at run time — long after `which` said it was installed.
+    return statSync(file).isFile();
   } catch {
     return false;
   }

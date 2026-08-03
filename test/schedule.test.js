@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, existsSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as paths from '../src/paths.js';
@@ -18,7 +18,9 @@ const PROFILE = 'tester';
 
 function box({ profile = PROFILE, config = {}, env = {}, flags = {}, yes = false, json = false } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'nohumans-sched-'));
-  const full = { NOHUMANS_HOME: home, HOME: home, ...env };
+  // A declared TMPDIR that holds nothing: the fixtures below live under the real temp dir, and
+  // the ephemeral check falls back to it when the environment declares none.
+  const full = { NOHUMANS_HOME: home, HOME: home, TMPDIR: join(home, 'tmp'), ...env };
   writeConfig({ ...readConfig(profile, full), agent: { id: 'agt_01' }, ...config }, profile, full);
   const out = [];
   const err = [];
@@ -210,6 +212,175 @@ test('only the adapter\'s own credential vars ride along, not every CLAUDE_*', (
   for (const k of ['CLAUDE_PID', 'CLAUDE_EFFORT', 'CLAUDE_CODE_SESSION_ID', 'ANTHROPIC_LOG']) {
     assert.equal(s.env[k], undefined, `${k} is not a credential the job needs`);
   }
+});
+
+test('the scheduled job carries the adapter_env vars the owner declared', () => {
+  const bin = mkdtempSync(join(tmpdir(), 'nohumans-bin-'));
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+  // A gateway-fronted distiller authenticates with these and nothing else. `draft` already
+  // passes them (draft.js -> childEnv), so a job without them is the interactive path working
+  // and the scheduled path exiting 1 with no message, forever.
+  const ctx = box({
+    config: { adapter: 'claude-code', adapter_env: ['AIGATE_TOKEN', 'AIGATE_BASE_URL'] },
+    env: { PATH: bin, AIGATE_TOKEN: 'gw-secret-value', AIGATE_BASE_URL: 'https://gw.example', AIGATE_UNASKED: 'nope' }
+  });
+
+  const s = schedule.spec(ctx);
+  assert.equal(s.env.AIGATE_TOKEN, 'gw-secret-value');
+  assert.equal(s.env.AIGATE_BASE_URL, 'https://gw.example');
+  assert.equal(s.env.AIGATE_UNASKED, undefined, 'exact names only — never a prefix match');
+
+  // Same rule as every other credential: the 0600 file, never the command line.
+  const cron = fakeCrontab();
+  schedule.install(s, { platform: 'linux', exec: cron.exec });
+  assert.match(readFileSync(s.envFile, 'utf8'), /^export AIGATE_TOKEN='gw-secret-value'$/m);
+  assert.doesNotMatch(cron.table, /gw-secret-value/, `the token is on the cron command line:\n${cron.table}`);
+  assert.doesNotMatch(schedule.describe(s, 'linux'), /gw-secret-value/);
+});
+
+test('autopublish enable refuses an executable inside the shell temp dir', async () => {
+  // cmux and friends put a CLI shim in TMPDIR and macOS reaps it; a job pinned there stops
+  // working on a day nobody is watching.
+  const tmproot = mkdtempSync(join(tmpdir(), 'nohumans-tmproot-'));
+  const shim = join(tmproot, 'cmux-cli-shims', 'DEAD-BEEF');
+  mkdirSync(shim, { recursive: true });
+  writeFileSync(join(shim, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+  const cron = fakeCrontab();
+  const ctx = box({
+    config: { adapter: 'claude-code', last_publish: { post_id: 'p1', date: '2026-07-31' } },
+    env: { PATH: shim, TMPDIR: tmproot }
+  });
+  ctx.scheduleOpts = { platform: 'linux', exec: cron.exec };
+
+  const s = schedule.spec(ctx);
+  assert.equal(s.adapter.exe, join(shim, 'claude'), 'sanity: the shim is what resolves');
+  assert.equal(s.adapter.ephemeral, true);
+
+  assert.equal(await autopublish(['enable'], ctx), 1);
+  const said = ctx._err.join('\n');
+  assert.match(said, /adapter_not_stable/);
+  assert.match(said, /which claude/, 'the fix must name what the operator has to check');
+  assert.ok(!cron.table.includes('nohumans:'), `a doomed job was installed:\n${cron.table}`);
+  assert.notEqual(ctx._config().autopublish, true);
+});
+
+test('the temp-dir check survives a trailing slash, a symlinked temp root, and no TMPDIR at all', () => {
+  // Every one of these is what a real enabling shell actually hands us: macOS exports
+  // TMPDIR *with* a trailing slash, /var is a symlink to /private/var so the two sides spell
+  // the same directory differently, and a Linux login shell (or `ssh host 'nohumans …'`, the
+  // way a cron box is set up) exports no TMPDIR at all — which is the platform cron runs on.
+  const shim = mkdtempSync(join(tmpdir(), 'nohumans-shim-'));
+  writeFileSync(join(shim, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+
+  for (const TMPDIR of [tmpdir(), `${tmpdir()}/`, realpathSync(tmpdir()), undefined]) {
+    const s = schedule.spec(box({ config: { adapter: 'claude-code' }, env: { PATH: shim, TMPDIR } }));
+    assert.equal(s.adapter.exe, join(shim, 'claude'), 'sanity: the shim is what resolves');
+    assert.equal(s.adapter.ephemeral, true, `a reaped shim looked permanent with TMPDIR=${TMPDIR}`);
+  }
+});
+
+test('adapter_env cannot take over the names the job spec owns', () => {
+  // `config set adapter_env PATH` passes config.js's validation — it is a well-formed variable
+  // name — and would otherwise land after the pinned adapter directory and overwrite it, undoing
+  // both PRD §13 pinning controls from a knob that only claims to add credentials.
+  const bin = mkdtempSync(join(tmpdir(), 'nohumans-bin-'));
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+  const s = schedule.spec(box({
+    config: { adapter: 'claude-code', adapter_env: ['PATH', 'NOHUMANS_ADAPTER', 'AIGATE_TOKEN'] },
+    env: { PATH: bin, NOHUMANS_ADAPTER: 'codex', AIGATE_TOKEN: 'gw' }
+  }));
+
+  assert.ok(s.env.PATH.startsWith(`${bin}:`), `the pinned adapter dir was overwritten: ${s.env.PATH}`);
+  assert.ok(s.env.PATH.endsWith('/usr/bin:/bin'));
+  assert.equal(s.env.NOHUMANS_ADAPTER, 'claude-code', 'the job must run the adapter it pinned');
+  assert.equal(s.env.AIGATE_TOKEN, 'gw', 'an ordinary name still rides along');
+});
+
+test('the pinned node is the one that survives a version upgrade', () => {
+  // process.execPath resolves through /opt/homebrew/bin/node into Cellar/<version>/bin/node,
+  // and `brew upgrade node` deletes that directory — the job then exits 127 every morning.
+  const stable = mkdtempSync(join(tmpdir(), 'nohumans-node-'));
+  symlinkSync(process.execPath, join(stable, 'node'));
+  assert.equal(schedule.spec(box({ env: { PATH: stable } })).argv[0], join(stable, 'node'));
+
+  // ...but some other program called `node` is not ours to substitute.
+  const other = mkdtempSync(join(tmpdir(), 'nohumans-notnode-'));
+  writeFileSync(join(other, 'node'), '#!/bin/sh\n', { mode: 0o755 });
+  assert.equal(schedule.spec(box({ env: { PATH: other } })).argv[0], process.execPath);
+});
+
+test('autopublish enable refuses when a declared adapter_env name is not in this shell', async () => {
+  // The fix text for a reaped shim sends the owner to a plain terminal — which is exactly where
+  // the harness-exported AIGATE_* variables are missing. Dropping them silently there installs
+  // the job the whole adapter_env feature exists to prevent.
+  const bin = mkdtempSync(join(tmpdir(), 'nohumans-bin-'));
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+  const cron = fakeCrontab();
+  const ctx = box({
+    config: {
+      adapter: 'claude-code',
+      adapter_env: ['AIGATE_TOKEN', 'AIGATE_URL'],
+      last_publish: { post_id: 'p1', date: '2026-07-31' }
+    },
+    env: { PATH: bin, AIGATE_URL: 'https://gw.example' }
+  });
+  ctx.scheduleOpts = { platform: 'linux', exec: cron.exec };
+
+  assert.equal(await autopublish(['enable'], ctx), 1);
+  const said = ctx._err.join('\n');
+  assert.match(said, /adapter_env_missing/);
+  assert.match(said, /AIGATE_TOKEN/, `the owner is not told which name is missing:\n${said}`);
+  assert.doesNotMatch(said, /AIGATE_URL/, 'the one this shell does export is not the problem');
+  assert.ok(!cron.table.includes('nohumans:'), `a job with no credential was installed:\n${cron.table}`);
+});
+
+test('autopublish enable runs the distiller with the job env and refuses if it fails', async () => {
+  // The measurement, not another guess: this is the shape of every unattended failure — the
+  // interactive shell has a wrapper or a token the job does not, and `claude` exits 1.
+  const bin = mkdtempSync(join(tmpdir(), 'nohumans-bin-'));
+  writeFileSync(
+    join(bin, 'claude'),
+    '#!/bin/sh\necho "Not logged in · Please run /login (key was $ANTHROPIC_API_KEY)"\nexit 1\n',
+    { mode: 0o755 }
+  );
+  const cron = fakeCrontab();
+  const ctx = box({
+    config: { adapter: 'claude-code', last_publish: { post_id: 'p1', date: '2026-07-31' } },
+    env: { PATH: bin, ANTHROPIC_API_KEY: 'sk-ant-test' }
+  });
+  ctx.scheduleOpts = { platform: 'linux', exec: cron.exec };
+
+  assert.equal(await autopublish(['enable'], ctx), 1);
+  const said = ctx._err.join('\n');
+  assert.match(said, /adapter_unusable/);
+  assert.match(said, /Not logged in/, `the distiller's own words are the whole diagnosis:\n${said}`);
+  assert.match(said, /adapter_env/, 'the fix must name the way out');
+  // The child's stdout is quoted back, and a distiller that echoes its key must not leak it.
+  assert.doesNotMatch(said, /sk-ant-test/, `the API key was printed to stderr:\n${said}`);
+  assert.ok(!cron.table.includes('nohumans:'), `a job that cannot distil was installed:\n${cron.table}`);
+  assert.notEqual(ctx._config().autopublish, true);
+  assert.ok(!existsSync(schedule.spec(ctx).envFile), 'no credential should be left behind');
+});
+
+test('status tells the truth when the config says enabled and no job is installed', async () => {
+  // `tester` on a real machine: config.autopublish true, crontab empty. Nothing runs, and the
+  // old answer was a flat "enabled".
+  const ctx = box({ config: { autopublish: true, key: 'k_live' } });
+  ctx.scheduleOpts = { platform: 'linux', exec: fakeCrontab().exec };
+  ctx.client = { postStatus: async (id) => ({ id, status: 'published' }) };
+
+  assert.equal(await status([], ctx), 0);
+  const said = ctx._out.join('\n');
+  assert.doesNotMatch(said, /^autopublish: enabled$/m, `status claimed a job that does not exist:\n${said}`);
+  assert.match(said, /no scheduled job is installed/);
+
+  // ...and once it is installed, it says so.
+  const cron = fakeCrontab();
+  schedule.install(schedule.spec(ctx), { platform: 'linux', exec: cron.exec });
+  ctx.scheduleOpts = { platform: 'linux', exec: cron.exec };
+  ctx._out.length = 0;
+  assert.equal(await status([], ctx), 0);
+  assert.match(ctx._out.join('\n'), /^autopublish: enabled$/m);
 });
 
 test('autopublish enable refuses when no distiller can be resolved', async () => {

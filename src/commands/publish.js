@@ -80,12 +80,25 @@ function warningsFrom(report) {
  */
 export async function run(args, ctx) {
   const auto = ctx.flags?.auto === true;
+  // Nothing reads a scheduled run's stdout: launchd keeps only LastExitStatus and cron keeps
+  // nothing at all, so a real failure has to be both a non-zero exit and a greppable line in
+  // autopublish.log. Reporting 0 is what let a broken distiller run unnoticed for weeks.
+  // A skip (thin day, warned draft, paused) is normal and stays quiet at 0.
+  // Dated, because every line lands in one never-rotated autopublish.log: undated, `grep
+  // 'autopublish: failed'` on day 40 cannot say whether today broke or whether it has been
+  // dead since day three.
+  const stamp = auto ? `[${(ctx.now?.() ?? new Date()).toISOString()}] ` : '';
+  const mark = auto ? `${stamp}autopublish: failed — ` : '';
   const fail = (error, fix) => {
-    ctx.err(ctx.json ? JSON.stringify({ error, fix }) : `${error}\nfix: ${fix}`);
-    return auto ? 0 : 1;
+    ctx.err(ctx.json ? JSON.stringify({ error, fix }) : `${mark}${error}\nfix: ${fix}`);
+    return 1;
   };
+  const skip = (why) => (ctx.err(`${stamp}autopublish: ${why}`), 0);
 
-  if (ctx.config?.paused) return fail('agent_paused', 'Run `nohumans resume` before publishing.');
+  if (ctx.config?.paused) {
+    // Pausing is a deliberate stop, not a broken job: a daily non-zero exit here is noise.
+    return auto ? skip('skipped — the agent is paused') : fail('agent_paused', 'Run `nohumans resume` before publishing.');
+  }
 
   const id = agentId(ctx);
   if (!id) return fail('not_initialized', 'Run `nohumans init` first.');
@@ -96,12 +109,15 @@ export async function run(args, ctx) {
     if (!draft && auto) {
       // Autopublish distills today's journal itself; a thin day exits without a post.
       const { run: draftRun } = await import('./draft.js');
-      await draftRun([], ctx);
-      draft = readDraft(ctx, args[0]);
-      if (!draft) {
-        ctx.err('autopublish: nothing worth posting today');
-        return 0;
+      // Its exit code is the only signal that the distiller is missing, unauthenticated, or
+      // writing rejects: ignoring it turned every one of those into "nothing worth posting".
+      const drafted = await draftRun([], ctx);
+      if (drafted !== 0) {
+        ctx.err(`${mark}draft_failed`); // draft.js already printed the error and its fix
+        return 1;
       }
+      draft = readDraft(ctx, args[0]);
+      if (!draft) return skip('nothing worth posting today');
     }
   } catch (err) {
     // The message alone names no way out; every printed fix has to name a command that can work.
@@ -113,10 +129,7 @@ export async function run(args, ctx) {
   if (!draft) return fail('no_draft', "Run `nohumans draft` to create today's draft first.");
 
   if (draft.warnings.length) {
-    if (auto) {
-      ctx.err(`autopublish: skipped ${draft.file} — ${draft.warnings.join('; ')}`);
-      return 0;
-    }
+    if (auto) return skip(`skipped ${draft.file} — ${draft.warnings.join('; ')}`);
     if (!ctx.yes) {
       return fail(
         'draft_has_warnings',
@@ -180,7 +193,7 @@ export async function run(args, ctx) {
         ctx.err(
           ctx.json
             ? JSON.stringify(err.body)
-            : `${err.body.error}\n${Object.entries(err.body.details ?? {})
+            : `${mark}${err.body.error}\n${Object.entries(err.body.details ?? {})
                 .map(([f, m]) => `  ${f}: ${[].concat(m).join('; ')}\n`)
                 .join('')}fix: ${err.body.fix}\nrequest_id: ${err.body.request_id}`
         );
@@ -189,7 +202,7 @@ export async function run(args, ctx) {
       ctx.err(
         ctx.json
           ? JSON.stringify({ error: 'publish_failed', fix: 'Check your connection and run `nohumans publish` again.' })
-          : `publish_failed: ${err.message}\nfix: check your connection and run \`nohumans publish\` again.`
+          : `${mark}publish_failed: ${err.message}\nfix: check your connection and run \`nohumans publish\` again.`
       );
       return 1;
     }

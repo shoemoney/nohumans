@@ -250,6 +250,79 @@ test('autopublish on a thin day publishes nothing and exits clean', async () => 
   assert.equal(client.calls.length, 0);
 });
 
+// A journal fat enough that `draft` gets as far as the distiller.
+function writeJournal(ctx) {
+  const dir = paths.journalDir(PROFILE, ctx.env);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, `${TODAY}.md`),
+    '- 09:12 chased a stale lock through three retries before the lease turned out to be the bug\n'
+  );
+}
+
+test('autopublish exits non-zero and marks the log when the distiller fails', async () => {
+  const client = fakeClient({ status: 201, body: {} });
+  const ctx = ctxFor({ client, config: { adapter: 'claude-code' }, flags: { auto: true } });
+  writeJournal(ctx);
+  // The real failure this hides: a gateway-fronted `claude` that cannot authenticate exits 1.
+  ctx.deps = { distill: async () => { throw new Error('adapter claude-code exited 1: '); } };
+
+  const code = await publish([], ctx);
+  const said = ctx._err.join('\n');
+  assert.notEqual(code, 0, `launchd records only this number; 0 says the day published fine:\n${said}`);
+  assert.match(said, /autopublish: failed/, `nothing greppable reached autopublish.log:\n${said}`);
+  assert.match(said, /distiller_failed/); // the underlying error still names itself
+  assert.doesNotMatch(said, /nothing worth posting today/, 'a broken distiller is not a quiet day');
+  assert.equal(client.calls.length, 0);
+});
+
+test('autopublish stays quiet and clean for the days that are legitimately skipped', async () => {
+  const client = fakeClient({ status: 201, body: {} });
+
+  // a warned draft awaiting review
+  const warned = ctxFor({ client, flags: { auto: true } });
+  writeDraft(warned, { report: { warned: true } });
+  assert.equal(await publish([], warned), 0);
+  assert.doesNotMatch(warned._err.join('\n'), /failed/);
+
+  // a paused agent — a deliberate stop, not a broken job
+  const paused = ctxFor({ client, config: { paused: true }, flags: { auto: true } });
+  writeDraft(paused);
+  assert.equal(await publish([], paused), 0);
+  assert.match(paused._err.join('\n'), /autopublish: skipped/);
+  assert.doesNotMatch(paused._err.join('\n'), /failed/);
+  assert.equal(client.calls.length, 0);
+});
+
+test('every autopublish failure exits non-zero and lands dated in the log', async () => {
+  // Three failures that never touch draft.js's exit code, so they only reach launchd through
+  // `fail()`. A partial report write (full disk) and a 422 from the API are both ordinary
+  // mornings; both used to be reported as a clean, published day.
+  const broken = ctxFor({ client: fakeClient({ status: 201, body: {} }), flags: { auto: true } });
+  const files = fmt.draftFiles(TODAY, broken);
+  writeDraft(broken);
+  writeFileSync(files.report, '{"warnings": ['); // truncated mid-write
+  assert.notEqual(await publish([], broken), 0);
+  assert.match(broken._err.join('\n'), /autopublish: failed — draft_invalid/);
+
+  const notInit = ctxFor({ client: fakeClient({ status: 201, body: {} }), config: { agent: null }, flags: { auto: true } });
+  writeDraft(notInit);
+  assert.notEqual(await publish([], notInit), 0);
+  assert.match(notInit._err.join('\n'), /autopublish: failed — not_initialized/);
+
+  const rejected = ctxFor({
+    client: fakeClient(new ApiError(422, { error: 'validation_failed', details: { title: 'too long' }, fix: 'Shorten it.', request_id: 'req_9' })),
+    flags: { auto: true }
+  });
+  writeDraft(rejected);
+  assert.notEqual(await publish([], rejected), 0);
+  const said = rejected._err.join('\n');
+  // A `grep 'autopublish: failed'` alarm is the entire monitoring contract for this job.
+  assert.match(said, /autopublish: failed — validation_failed/);
+  // ...and undated lines in a log that never rotates cannot say whether today or day three broke.
+  assert.match(said, /^\[2026-\d\d-\d\dT[\d:.]+Z\] autopublish: failed/m, `no timestamp:\n${said}`);
+});
+
 test('publish refuses while paused and when no draft exists', async () => {
   const client = fakeClient({ status: 201, body: {} });
   const paused = ctxFor({ client, config: { paused: true } });
