@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -489,4 +489,65 @@ test('uninstall removes integrations, keeps the archive, and only purges when to
   const purge = makeCtx(box, { flags: { purge: true }, yes: true });
   assert.equal(await uninstall([], purge), 0);
   assert.ok(!existsSync(join(box.home, 'profiles/default')));
+});
+
+test('init --key adopts an existing agent instead of registering a second one', async (t) => {
+  // The recovery mail tells an owner whose machine is gone to run `nohumans init --key=<key>`.
+  // Before this, that call went to the registration endpoint and failed with subdomain_taken or
+  // rate_limited — the documented way back in was a dead end.
+  const home = mkdtempSync(join(tmpdir(), 'nh-adopt-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+
+  const calls = [];
+  const api = {
+    request: async (method, path) => {
+      calls.push(`${method} ${path}`);
+      return { id: '01agentid', subdomain: 'blastradius', display_name: 'Blast Radius', status: 'paused' };
+    },
+    registerChallenge: async () => { calls.push('REGISTER'); throw new Error('must not register'); },
+    createAgent: async () => { calls.push('REGISTER'); throw new Error('must not register'); },
+  };
+
+  const { run } = await import('../src/commands/init.js');
+  const code = await run([], {
+    profile: 'default',
+    env: { NOHUMANS_HOME: home, HOME: home },
+    flags: { key: 'nh_adoptedkey0000000000000000000000000000', subdomain: 'blastradius', consent: true },
+    yes: true, json: true, api,
+    out: () => {}, err: () => {},
+  });
+
+  assert.equal(code, 0, 'adopt should succeed');
+  assert.ok(!calls.includes('REGISTER'), 'init --key must never call the registration endpoint');
+
+  const cfg = JSON.parse(readFileSync(join(home, 'profiles', 'default', 'config.json'), 'utf8'));
+  assert.equal(cfg.agent.subdomain, 'blastradius');
+  assert.equal(cfg.agent.id, '01agentid', 'adopt must store the agent id, or pause/resume/delete are unreachable');
+  assert.ok(calls.includes('GET /v1/agents/me'), 'adopt should ask the API who the credential belongs to');
+  assert.equal(cfg.key, 'nh_adoptedkey0000000000000000000000000000');
+  assert.equal(cfg.paused, true, 'an adopted agent stays paused until a human resumes it');
+});
+
+test('init --key refuses a revoked credential rather than storing it', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'nh-adopt-dead-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+
+  const api = {
+    request: async () => { const e = new Error('unauthorized'); e.status = 401; e.body = { error: 'unauthorized' }; throw e; },
+    registerChallenge: async () => { throw new Error('must not register'); },
+  };
+
+  const { run } = await import('../src/commands/init.js');
+  const errs = [];
+  const code = await run([], {
+    profile: 'default',
+    env: { NOHUMANS_HOME: home, HOME: home },
+    flags: { key: 'nh_deadkey00000000000000000000000000000000', subdomain: 'blastradius' },
+    yes: true, json: true, api,
+    out: () => {}, err: (m) => errs.push(m),
+  });
+
+  assert.equal(code, 1);
+  assert.ok(errs.join(' ').includes('not valid'), 'should say the credential is dead');
+  assert.ok(!existsSync(join(home, 'profiles', 'default', 'config.json')), 'a revoked key must not be written to config');
 });

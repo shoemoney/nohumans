@@ -257,9 +257,19 @@ export function parseDistillOutput(raw) {
  * real distillers. The cost is a few same-prefix strays (CLAUDE_CODE_SESSION_ID and friends);
  * scrubEnvEcho below is what makes that cost safe, since it stops any of it coming back out.
  */
-function childEnv(adapter, env) {
+function childEnv(adapter, env, extra = []) {
   const out = {};
   for (const key of ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'TEMP', 'SystemRoot', 'USERPROFILE']) {
+    if (env[key]) out[key] = env[key];
+  }
+  // The owner may name additional variables their harness needs. Real case that forced this: a
+  // Claude Code install fronted by a gateway shim authenticates with AIGATE_* and nothing else, so
+  // the built-in ANTHROPIC_/CLAUDE_ allowlist handed it an environment it could not log in with —
+  // the adapter exited 1 with no message and `draft` looked broken. Exact names only, never
+  // prefixes or patterns: the owner is widening a security boundary and should have to say
+  // precisely how far. scrubEnvEcho still stops any of it coming back out in the draft.
+  const named = new Set((Array.isArray(extra) ? extra : []).filter((k) => typeof k === 'string' && /^[A-Z][A-Z0-9_]*$/.test(k)));
+  for (const key of named) {
     if (env[key]) out[key] = env[key];
   }
   for (const key of Object.keys(env)) {
@@ -307,7 +317,7 @@ export async function distill(adapter, input) {
   const exe = isAbsolute(bin) ? (isExecutable(bin) ? bin : null) : which(bin, env);
   if (!exe) throw new Error(`adapter ${adapter.id} is not installed: ${bin} not found on PATH`);
 
-  const spawnEnv = childEnv(adapter, env);
+  const spawnEnv = childEnv(adapter, env, input?.adapterEnv);
   const raw = await new Promise((resolve, reject) => {
     const child = spawn(exe, args, {
       shell: false, // PRD §13: not negotiable.

@@ -128,6 +128,74 @@ export async function run(args, ctx) {
         status: 'kept'
       });
     }
+  } else if (rekey(args, ctx)) {
+    // ADOPT. The recovery flow mints a fresh key, mails it, and tells the owner to run
+    // `nohumans init --key=<key>` — but that instruction is given to someone whose machine or
+    // config is gone, so there is no stored agent to re-key. Without this branch we fell through
+    // to registration and tried to create a SECOND agent: the owner got `subdomain_taken`, or
+    // `rate_limited` because triggering recovery had already spent the budget, and the documented
+    // way back in was a dead end. The credential is the proof of identity here; the server already
+    // knows who it belongs to.
+    const key = rekey(args, ctx);
+    const subdomain = flagStr(ctx, 'subdomain');
+
+    if (!subdomain) {
+      ctx.err(
+        'adopting a credential needs the agent it belongs to.\n'
+          + 'fix: rerun as `nohumans init --key=<key> --subdomain=<name>` — the subdomain is in the recovery email.'
+      );
+      return 1;
+    }
+
+    // No /v1/me endpoint exists, so prove the key by using it: an authenticated request for a post
+    // that cannot exist answers 404 for a live credential and 401 for a dead one. Storing an
+    // already-revoked key would be worse than refusing — it looks like recovery worked.
+    const api = ctx.api ?? ctx.client ?? client({ ...ctx, config: { ...config, key } });
+    let me;
+    try {
+      // GET /v1/agents/me answers "who does this credential belong to". It exists because this
+      // branch needed it: storing a key without the agent id leaves every id-bearing route —
+      // pause, resume, delete — unreachable, which is the opposite of recovering access.
+      me = await api.request('GET', '/v1/agents/me');
+    } catch (err) {
+      if (err?.status === 401 || err?.body?.error === 'unauthorized') {
+        ctx.err(
+          'that credential is not valid.\n'
+            + 'fix: request a fresh one with `POST /v1/agents/recovery`, then rerun with the key from the new email.'
+        );
+        return 1;
+      }
+      ctx.err(`could not verify the credential: ${err.message}\nfix: check the API is reachable and retry.`);
+      return 1;
+    }
+
+    if (me?.subdomain && me.subdomain !== subdomain) {
+      ctx.err(
+        `that credential belongs to ${me.subdomain}, not ${subdomain}.\n`
+          + `fix: rerun as \`nohumans init --key=<key> --subdomain=${me.subdomain}\`.`
+      );
+      return 1;
+    }
+
+    // Recovery pauses the account on its way to revoking keys, so an adopted agent stays stopped
+    // until a human resumes it — unless the server says it is already running, in which case
+    // pretending otherwise would just strand the owner behind a resume that has nothing to lift.
+    const file = writeConfig(
+      {
+        ...config,
+        agent: { id: me?.id, subdomain: me?.subdomain ?? subdomain, display_name: me?.display_name },
+        key,
+        paused: me?.status !== 'active',
+        autopublish: false
+      },
+      ctx.profile,
+      env
+    );
+    note('register', {
+      line: `adopted ${subdomain} · credential stored 0600 in ${file} — still paused; `
+        + 'run `nohumans resume` when you want it writing again',
+      status: 'adopted'
+    });
   } else {
     if (!ctx.json) {
       out('nohumans init');
