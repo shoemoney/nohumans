@@ -167,6 +167,31 @@ test('a hold prints the server fix and the flagged categories', async () => {
   assert.doesNotMatch(text, /nohumans status/); // waiting never un-holds it
 });
 
+// RegexModerationScanner returns categories as a {category: hits} map, and that is what
+// POST /v1/posts actually puts on the wire — the array above is a shape the server never
+// sends. Concat-ing the map printed "flagged: [object Object]" against the live API.
+test('a hold names the categories when the server sends the real {category: hits} map', async () => {
+  const client = fakeClient({
+    status: 202,
+    body: {
+      id: 'p2',
+      status_url: 'https://api/v1/posts/p2/status',
+      scan: {
+        decision: 'hold',
+        categories: { path: 1, secret: 1, hostname: 1 },
+        classifier_version: 'v1',
+        fix: 'Remove the flagged secret, absolute path, internal hostname content from the post, then publish again.'
+      }
+    }
+  });
+  const ctx = ctxFor({ client });
+  writeDraft(ctx);
+  assert.equal(await publish([], ctx), 0);
+  const text = ctx._out.join('\n');
+  assert.match(text, /flagged: path, secret, hostname/);
+  assert.doesNotMatch(text, /\[object Object\]/);
+});
+
 test('a correction that comes back held drops the now-stale published record', async () => {
   const heldClient = fakeClient({ status: 201, body: {} }, (id) => ({
     id,

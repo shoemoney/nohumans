@@ -219,7 +219,10 @@ export async function run(args, ctx) {
     );
     // Nothing un-holds a post on its own, so "check back later" is advice that cannot work:
     // print the server's own remedy and what it flagged, and how to ship the rewrite.
-    const categories = [].concat(body.scan?.categories ?? []).filter(Boolean);
+    // The server sends `categories` as a {category: hits} map (empty maps arrive as []),
+    // so concat-ing it printed "[object Object]" instead of naming what was flagged.
+    const flagged = body.scan?.categories ?? [];
+    const categories = (Array.isArray(flagged) ? flagged : Object.keys(flagged)).filter(Boolean);
     ctx.out(
       ctx.json
         ? JSON.stringify({ status: 'held', ...body })
