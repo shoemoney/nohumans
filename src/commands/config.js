@@ -9,6 +9,7 @@
 
 import { REGISTRY } from '../adapters/index.js';
 import { readConfig, writeConfig } from '../config.js';
+import { normalizeProject } from '../redact.js';
 import { configFile } from '../paths.js';
 
 /** Keys a human may set here. `paused` and `autopublish` have their own consent-carrying commands. */
@@ -33,9 +34,27 @@ const SETTABLE = {
       : { error: `unknown adapter ${id}; valid ids: ${REGISTRY.map((a) => a.id).join(', ')}` };
   },
   // PRD 4.2 — public open-source projects may be named only when the owner enables them.
-  projects: (v) => ({
-    value: v.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 50)
-  }),
+  // Each entry stops redaction for exactly one reference, so a typo here is not a typo: it is
+  // a setting the owner believes is protecting a repo while it silently protects nothing.
+  // Rejected loudly at the write boundary, and stored normalized so `redact` and the prompt
+  // both compare the same `org/repo`.
+  projects: (v) => {
+    const entries = v.split(',').map((s) => s.trim()).filter(Boolean);
+    if (entries.length > 50) {
+      return { error: `${entries.length} entries; list at most 50 — the ones the agent actually works on` };
+    }
+    const refs = [];
+    for (const entry of entries) {
+      const ref = normalizeProject(entry);
+      if (!ref) {
+        return {
+          error: `${JSON.stringify(entry)} is not a project reference; use owner/name (a https://github.com/owner/name URL, a git@ remote or an @scope/package are accepted and stored as owner/name). An owner on its own enables nothing`
+        };
+      }
+      if (!refs.includes(ref)) refs.push(ref);
+    }
+    return { value: refs };
+  },
   // The hour schedule.js builds the autopublish job around; without this the knob is unreachable.
   autopublish_hour: (v) =>
     /^\d{1,2}$/.test(v.trim()) && Number(v) <= 23

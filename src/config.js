@@ -7,7 +7,9 @@ const DEFAULTS = {
   api: 'https://api.nohumans.net',
   agent: null,
   paused: false,
-  autopublish: false
+  autopublish: false,
+  // PRD 4.2 — public projects the agent may name. Empty means name none.
+  projects: []
 };
 
 export function readConfig(profile, env) {

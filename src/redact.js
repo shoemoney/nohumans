@@ -97,6 +97,82 @@ const RULES = [
   { category: 'path', re: /\\\\[\w.-]+(?:[/\\][\w.@+-]+)+[/\\]?/g },
 ];
 
+/**
+ * The reference shapes the code-host and scoped-package rules above redact — and therefore the
+ * only shapes the `projects` allowlist can spare. Spans match those rules exactly, so an allowed
+ * reference is passed over and everything else is redacted byte-for-byte as before.
+ */
+const PROJECT_SHAPES = [
+  // https://github.com/org/repo, github.com/org/repo, git@github.com:org/repo.git, ghcr.io/org/img
+  /(?:[\w.-]+@)?\b(?:https?:\/\/)?(?:www\.|registry\.)?(?:(?:github|gitlab|bitbucket)\.(?:com|org)|ghcr\.io)[/:][\w.-]+\/[\w.-]+?(?:\.git)?(?![\w.-])/gi,
+  // @scope/package
+  /(?<![\w@./-])@[a-z0-9][\w.-]*\/[\w.-]+/gi,
+];
+
+/**
+ * Sentinel for an allowed reference held out of the scan. It cannot collide: control characters
+ * are stripped from the input before this runs.
+ *
+ * It deliberately does NOT read as a word character to its neighbours, so the span held is the
+ * project reference and not one byte more: `github.com/org/repo/pull/9821` keeps naming the repo
+ * and still loses `/pull/9821` to the path rule, and `github.com/org/repo/../billing` cannot walk
+ * one allowlist entry sideways into a repo the owner never enabled.
+ */
+const HELD = (i) => `\u0001${i}\u0001`;
+const HELD_RE = /\u0001(\d+)\u0001/g;
+
+/**
+ * One project reference — `org/repo` or `@scope/pkg`, lowercased — from an owner's config entry
+ * or from matched text, or null when the value is not a project reference at all.
+ * A code-host prefix and a `.git` suffix are stripped so a pasted URL and a typed `org/repo`
+ * become the same key; nothing else is accepted, so `vuejs` alone and `acme/*` enable nothing.
+ * @param {unknown} value
+ * @returns {string|null}
+ */
+export function normalizeProject(value) {
+  if (typeof value !== 'string') return null;
+  const ref = value.trim().toLowerCase()
+    .replace(/^(?:[\w.-]+@)?(?:https?:\/\/)?(?:www\.|registry\.)?(?:(?:github|gitlab|bitbucket)\.(?:com|org)|ghcr\.io)[/:]/, '')
+    .replace(/\/+$/, '')
+    .replace(/\.git$/, '');
+  return /^@?[a-z0-9][\w.-]{0,63}\/[a-z0-9][\w.-]{0,99}$/.test(ref) ? ref : null;
+}
+
+/**
+ * Hold allowlisted public projects out of the scan, and put them back afterwards (PRD §4.2:
+ * "Public open-source projects may be named only when the owner enables that project in
+ * configuration"). Held, not skipped per-rule: `git@github.com:org/repo.git` is claimed by the
+ * scp rule and its remains would be eaten by the email rule right after it.
+ *
+ * Two things make this safe to have at all:
+ *   - the denylist always wins — the denylist is tested against the whole matched reference,
+ *     host and `.git` included, which is a superset of the `org/repo` an entry can name. So a
+ *     term hitting any part of it wins, and an allowlist entry can never un-redact something the
+ *     owner marked private;
+ *   - membership is exact — `acme/api` spares `acme/api` and nothing else, so `acme/api-secrets`
+ *     and `evil.com/acme/api` still go, and one entry can never widen into a wildcard.
+ */
+function holdProjects(text, projects, denyRe) {
+  const allowed = new Set();
+  for (const entry of Array.isArray(projects) ? projects : []) {
+    const ref = normalizeProject(entry);
+    if (ref) allowed.add(ref);
+  }
+  if (allowed.size === 0) return { text, restore: (s) => s };
+
+  const held = [];
+  let out = text;
+  for (const re of PROJECT_SHAPES) {
+    out = out.replace(re, (m) => {
+      const ref = normalizeProject(m);
+      if (!ref || !allowed.has(ref) || (denyRe && denyRe.test(m))) return m;
+      held.push(m);
+      return HELD(held.length - 1);
+    });
+  }
+  return { text: out, restore: (s) => s.replace(HELD_RE, (token, i) => held[Number(i)] ?? token) };
+}
+
 /** IPs that identify nobody — redacting them only destroys context. */
 const IP_ALLOWLIST = new Set(['127.0.0.1', '0.0.0.0', '255.255.255.255', '::1']);
 
@@ -145,7 +221,7 @@ function normalizeInput(text) {
 }
 
 /** Denylist terms → one case-insensitive alternation, longest first. */
-function denylistRule(denylist) {
+function denylistPattern(denylist) {
   const terms = [...new Set(
     (Array.isArray(denylist) ? denylist : [])
       .filter((t) => typeof t === 'string')
@@ -155,27 +231,31 @@ function denylistRule(denylist) {
 
   if (terms.length === 0) return null;
   // No \b: terms may start or end with punctuation (paths, @handles).
-  return { category: 'denylist', re: new RegExp(`(?<![\\w-])(?:${terms.map(escapeRe).join('|')})(?![\\w-])`, 'gi') };
+  return `(?<![\\w-])(?:${terms.map(escapeRe).join('|')})(?![\\w-])`;
 }
 
 /**
  * @param {string} text
  * @param {string[]} [denylist] terms from denylist.txt
+ * @param {string[]} [projects] config.projects — public projects the owner enabled by name
  * @returns {RedactResult}
  */
-export function redact(text, denylist = []) {
+export function redact(text, denylist = [], projects = []) {
   const { text: normalized, oversize } = normalizeInput(text);
   const counts = new Map();
   const bump = (category) => counts.set(category, (counts.get(category) ?? 0) + 1);
   if (oversize) bump('oversize');
 
-  const deny = denylistRule(denylist);
+  const pattern = denylistPattern(denylist);
+  const deny = pattern ? { category: 'denylist', re: new RegExp(pattern, 'gi') } : null;
   const rules = [...RULES];
   if (deny) rules.splice(rules.findIndex((r) => r.category !== 'secret'), 0, deny);
 
   const sum = () => [...counts.values()].reduce((a, b) => a + b, 0);
 
-  let s = normalized;
+  // Non-global twin: `re.test` on a /g regex is stateful, and this one is asked repeatedly.
+  const held = holdProjects(normalized, projects, pattern ? new RegExp(pattern, 'i') : null);
+  let s = held.text;
   let passes = 0;
   let total = sum();
 
@@ -193,6 +273,8 @@ export function redact(text, denylist = []) {
     total = sum();
     if (total === before) break;
   }
+
+  s = held.restore(s);
 
   const findings = [...counts.entries()]
     .map(([category, count]) => ({ category, count }))

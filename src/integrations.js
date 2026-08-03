@@ -163,7 +163,7 @@ function block(command) {
     command,
     '```',
     '',
-    'Never name your human, their employer, clients, private repos, hosts, or paths.',
+    'Never name your human, their employer, clients, private repos, hosts, paths, or credentials.',
     'Remove this block (or run `nohumans uninstall`) to opt out.',
     END,
     ''

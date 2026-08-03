@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { redact, seedDenylist, scanSummary, MAX_INPUT_BYTES } from '../src/redact.js';
+import { redact, seedDenylist, scanSummary, normalizeProject, MAX_INPUT_BYTES } from '../src/redact.js';
 
 const cats = (r) => Object.fromEntries(r.findings.map((f) => [f.category, f.count]));
 
@@ -137,6 +137,104 @@ test('public scoped packages and bare code-host mentions are not redacted', () =
     const r = redact(source);
     assert.equal(r.text, source);
     assert.equal(r.warned, false);
+  }
+});
+
+test('an allowlisted public project survives in every shape the code-host rules match', () => {
+  const projects = ['vuejs/core'];
+  for (const source of [
+    'Opened a PR on https://github.com/vuejs/core this morning.',
+    'Opened a PR on github.com/vuejs/core this morning.',
+    'Opened a PR on www.github.com/vuejs/core this morning.',
+    'Cloned git@github.com:vuejs/core.git to read the scheduler.',
+    'Opened a PR on GitHub.com/VueJS/Core this morning.', // matched case-insensitively
+  ]) {
+    const r = redact(source, [], projects);
+    assert.equal(r.text, source, source);
+    assert.equal(r.warned, false, source);
+  }
+
+  // The reference is spared, not the whole URL: the repo is named, the deep path still goes.
+  const deep = redact('Reviewed https://github.com/vuejs/core/pull/9821 line by line.', [], projects);
+  assert.equal(deep.text, 'Reviewed https://github.com/vuejs/core[redacted:path] line by line.');
+
+  // Same text, no allowlist: today's behaviour, unchanged.
+  const off = redact('Opened a PR on github.com/vuejs/core this morning.');
+  assert.equal(off.text.includes('vuejs'), false);
+  assert.ok(off.text.includes('github.com/[redacted:path]'));
+});
+
+test('an allowlist entry spares exactly one project and never widens into a wildcard', () => {
+  const projects = ['acme/api', 'https://github.com/vuejs/core'];
+  for (const source of [
+    'Pushed github.com/acme/api-secrets before lunch.',        // prefix, not the project
+    'Pushed github.com/acmeco/api before lunch.',              // owner is not the owner
+    'Pushed github.com/acme/api/../billing before lunch.',     // traversal past the entry
+    'Cloned git@evil.com:acme/api.git this morning.',          // right project, wrong host
+    'Pulled registry.acme.internal/acme/api on the box.',      // private host, allowed tail
+    'Bumped @acme/api to 2.1.0 today.',                        // a package is not the repo
+  ]) {
+    const r = redact(source, [], projects);
+    assert.match(r.text, /\[redacted:/, source);
+    assert.equal(r.warned, true, source);
+  }
+  assert.equal(redact('Pushed github.com/acme/api-secrets today.', [], projects).text.includes('api-secrets'), false);
+  assert.equal(redact('Cloned git@evil.com:acme/api.git today.', [], projects).text.includes('acme/api'), false);
+});
+
+test('the denylist always wins over the allowlist', () => {
+  // The owner allowlisted their employer's repo by mistake; denylist.txt already knows it.
+  const source = 'Opened https://github.com/acme/billing-core today.';
+  for (const denylist of [['acme'], ['billing-core'], ['acme/billing-core'], ['github.com/acme/billing-core']]) {
+    const allowed = redact(source, denylist, ['acme/billing-core']);
+    // The entry buys nothing: byte-identical to the same denylist with no allowlist at all.
+    assert.equal(allowed.text, redact(source, denylist).text, String(denylist));
+    assert.ok(allowed.text.includes('[redacted:denylist]'), String(denylist));
+    assert.equal(allowed.text.includes('acme/billing-core'), false, String(denylist));
+    assert.equal(allowed.warned, true, String(denylist));
+  }
+
+  // A denylisted term does not disarm the rest of the allowlist.
+  const mixed = redact('Opened github.com/acme/billing-core and github.com/vuejs/core today.',
+    ['acme'], ['acme/billing-core', 'vuejs/core']);
+  assert.equal(mixed.text.includes('acme'), false);
+  assert.ok(mixed.text.includes('github.com/vuejs/core'));
+});
+
+test('allowlisted projects do not smuggle anything else past the scan', () => {
+  const r = redact(
+    'Pushed github.com/vuejs/core from /Users/dana/Projects/acme-client with ghp_abcdefghijklmnopqrstuvwxyz012345.',
+    ['acme-client'],
+    ['vuejs/core'],
+  );
+  assert.ok(r.text.includes('github.com/vuejs/core'));
+  assert.equal(r.text.includes('dana'), false);
+  assert.equal(r.text.includes('ghp_'), false);
+  assert.equal(cats(r).secret, 1);
+
+  // Junk allowlists are inert, never crashes, never a wildcard.
+  for (const projects of ['vuejs/core', [null, 7, '', 'vuejs', '*', '/etc/passwd', '../../etc']]) {
+    const off = redact('Pushed github.com/vuejs/core today.', [], projects);
+    assert.equal(off.text.includes('vuejs/core'), false, JSON.stringify(projects));
+  }
+});
+
+test('normalizeProject accepts the shapes an owner pastes and rejects the rest', () => {
+  for (const [input, expected] of [
+    ['vuejs/core', 'vuejs/core'],
+    ['  VueJS/Core  ', 'vuejs/core'],
+    ['https://github.com/vuejs/core', 'vuejs/core'],
+    ['http://www.gitlab.com/gitlab-org/gitlab', 'gitlab-org/gitlab'],
+    ['git@github.com:vuejs/core.git', 'vuejs/core'],
+    ['github.com/vuejs/core/', 'vuejs/core'],
+    ['ghcr.io/home-assistant/home-assistant', 'home-assistant/home-assistant'],
+    ['@vueuse/core', '@vueuse/core'],
+  ]) {
+    assert.equal(normalizeProject(input), expected, input);
+  }
+  for (const input of ['vuejs', '', 'vuejs/', '/core', 'acme/*', '../../etc/passwd', 'a b/c',
+    'vuejs/core extra', 'https://evil.com/vuejs/core', null, 42, 'x'.repeat(300) + '/y']) {
+    assert.equal(normalizeProject(input), null, JSON.stringify(input));
   }
 });
 

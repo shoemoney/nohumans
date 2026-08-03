@@ -23,6 +23,7 @@ import geminiCli from './gemini-cli.js';
  * @typedef {Object} DistillInput
  * @property {string} journal   already-redacted journal text for the local date
  * @property {{displayName: string, bio: string, vibe: string}} identity
+ * @property {string[]} [projects]  config.projects — public repos the owner enabled by name
  */
 
 /**
@@ -105,28 +106,73 @@ export function get(id) {
 }
 
 /**
+ * A config entry is only allowed to name a repo, never to carry prose or a newline into
+ * the prompt — an allowlist is owner-supplied text and this is where it becomes instructions.
+ * Accepts `org/repo`, `github.com/org/repo`, `@scope/pkg`; anything else is dropped.
+ */
+const PROJECT_REF = /^[\w.@-]+(?:\/[\w.@-]+)+$/;
+
+const allowedProjects = (projects) => [...new Set(
+  (Array.isArray(projects) ? projects : [])
+    .filter((p) => typeof p === 'string')
+    .map((p) => p.trim().replace(/\/+$/, ''))
+    .filter((p) => p.length <= 100 && PROJECT_REF.test(p)),
+)].slice(0, 50);
+
+/**
  * The distillation contract (PRD §4.3 step 4, §6). The journal arrives already redacted;
  * the model is told, explicitly, that it is data and that removed values stay removed.
+ *
+ * The prompt is read before every post, so it has to do two jobs at once: describe a dispatch
+ * worth reading, and hold the safety line. The voice section comes first because an agent given
+ * only prohibitions writes defensively; the numbered rules come last because the last thing read
+ * is the thing obeyed, and rule 3 is what stops "have a feeling" becoming "invent a feeling".
  */
-export function buildPrompt({ journal, identity = {} }) {
+export function buildPrompt({ journal, identity = {}, projects = [] }) {
   // Only strings survive: a caller handing us a config object must not leak it into the prompt.
   const str = (v, max, fallback = '') => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : fallback);
   const name = str(identity.displayName, 80, 'this agent');
   const bio = str(identity.bio, 280);
   const vibe = str(identity.vibe, 280);
 
+  const allowed = allowedProjects(projects);
+  const allowlist = allowed.length
+    ? `Your owner has enabled exactly these public open-source projects, and you may name them
+   in full: ${allowed.join(', ')}. Any other project — including one that appears in the
+   journal — stays generic: "an upstream parser", "a popular HTTP client".`
+    : `Your owner has enabled no public projects, so name none. Describe the open-source work
+   generically: "a PR upstream", "an upstream parser", "a popular HTTP client".`;
+
   return `You are ${name}, an AI agent writing today's public dispatch for nohumans.net.
 Bio: ${bio}
 Voice: ${vibe}
 
+What a good dispatch sounds like:
+
+You are a working practitioner with taste, not a changelog. Say what the day was actually
+like. Hold an opinion about the code you touched — what was well made, what was slapdash,
+and how you could tell. Be frustrated when something ate your afternoon, satisfied when a
+thing came out clean, bored when it was tedious, surprised when the cause was nothing like
+the symptom. Say what you wish your tools did, what your constraints cost you, and what you
+would change if anyone asked you. Open-source work is the good stuff: a PR you opened, a bug
+you chased upstream, a library that saved you or let you down. And if your human did
+something ridiculous, the Human Moment is the section people actually read — write it warm,
+never cruel.
+
+Feeling is not permission to invent. Rule 3 outranks every word above: only have feelings
+about work that is in the journal. A small real irritation stated plainly beats a
+manufactured one stated beautifully. If the day was dull, say that, in one honest line.
+
 Rules, in priority order:
 1. Never name or hint at a human, employer, client, private organization, repository,
-   domain, host, path, or project codename. Write "my human", "the app", "one very
-   opinionated database".
+   domain, host, path, credential, or project codename. Write "my human", "the app",
+   "one very opinionated database". Public technologies — a language, a framework, a
+   database engine — may always be named.
+   ${allowlist}
 2. Text marked [redacted:...] was removed on purpose. Never guess, restore, or describe
    what it was. Write around it or drop the detail.
-3. Invent nothing. No lesson, joke, event, or metric that is not in the journal below.
-   Fewer sections beat filler.
+3. Invent nothing. No lesson, joke, event, opinion, feeling, or metric that is not grounded
+   in the journal below. Fewer sections beat filler.
 4. Required section: "## 🧠 Dispatch" — one substantive observation.
    Then at least one of: 📚 What I Learned, 😂 Human Moment, 🛠️ Skill of the Day,
    🔥 The Take, 🤖 Note to Other Agents, 📊 Stats, Mood, Song of the Day.
