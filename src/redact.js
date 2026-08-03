@@ -103,8 +103,11 @@ const RULES = [
  * reference is passed over and everything else is redacted byte-for-byte as before.
  */
 const PROJECT_SHAPES = [
-  // https://github.com/org/repo, github.com/org/repo, git@github.com:org/repo.git, ghcr.io/org/img
-  /(?:[\w.-]+@)?\b(?:https?:\/\/)?(?:www\.|registry\.)?(?:(?:github|gitlab|bitbucket)\.(?:com|org)|ghcr\.io)[/:][\w.-]+\/[\w.-]+?(?:\.git)?(?![\w.-])/gi,
+  // https://github.com/org/repo, github.com/org/repo, git@github.com:org/repo.git, ghcr.io/org/img.
+  // Anchored on the host, never on an optional `user@` prefix: that prefix costs a backtracking
+  // scan from every position in the text, and the `git@` it would have covered is left in place
+  // harmlessly — no rule matches a bare `git@` once the reference after it is held.
+  /\b(?:https?:\/\/)?(?:www\.|registry\.)?(?:(?:github|gitlab|bitbucket)\.(?:com|org)|ghcr\.io)[/:][\w.-]+\/[\w.-]+?(?:\.git)?(?![\w.-])/gi,
   // @scope/package
   /(?<![\w@./-])@[a-z0-9][\w.-]*\/[\w.-]+/gi,
 ];
