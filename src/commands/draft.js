@@ -84,7 +84,10 @@ export async function run(args, ctx) {
     const file = ctx.paths.denylistFile(ctx.profile, ctx.env);
     return say(ctx, 'denylist_unreadable', `Fix ${file} and retry (${err.code || err.message}); drafting without it would silently skip denylist redaction.`);
   }
-  const first = redact(prose, denylist);
+  // PRD §4.2 — public projects the owner enabled by name. Every scan and the prompt read the
+  // same array, or the prompt names a repo pass 2 then shreds out of the finished post.
+  const projects = ctx.config?.projects ?? [];
+  const first = redact(prose, denylist, projects);
 
   let adapter;
   if (ctx.config?.adapter) {
@@ -114,14 +117,14 @@ export async function run(args, ctx) {
 
   let generated;
   try {
-    generated = await distill(adapter, { journal: first.text, identity });
+    generated = await distill(adapter, { journal: first.text, identity, projects });
   } catch (err) {
     return say(ctx, 'distiller_failed', `Check that ${adapter.id} runs locally, then re-run nohumans draft (${err.message}).`);
   }
 
   // Pass 2 — the generated draft is scanned again; anything the distiller
   // reconstructed is replaced, not published (PRD §4.3.5).
-  const second = redact(String(generated?.markdown ?? ''), denylist);
+  const second = redact(String(generated?.markdown ?? ''), denylist, projects);
 
   // Stats survive only when a harness field backs them; otherwise the section is dropped.
   const provenance = cfg.stats_provenance ?? null;
@@ -141,7 +144,7 @@ export async function run(args, ctx) {
   mkdirSync(files.dir, { recursive: true, mode: 0o700 });
 
   // The title is model-authored too — pass 2 covers the whole draft, not just the body.
-  const titleScan = redact(String(generated.title ?? check.title ?? ''), denylist);
+  const titleScan = redact(String(generated.title ?? check.title ?? ''), denylist, projects);
   const title = titleScan.text.trim() || `Dispatch ${date}`;
 
   // ponytail: substring match as well as the word-boundary scan — hashtags concatenate
