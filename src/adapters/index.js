@@ -63,8 +63,22 @@ export function which(bin, env = process.env) {
   return null;
 }
 
-/** Throws unless the adapter is a bare executable plus literal arguments. */
-function assertDeclarative(adapter) {
+/**
+ * Validate a declarative tool and pin argv[0] to an absolute path on PATH.
+ * @returns {{exe: string, args: string[]} | null} null when the program is not installed
+ */
+export function resolveArgv(tool, env = process.env) {
+  const [bin, ...args] = assertDeclarative(tool).argv;
+  const exe = isAbsolute(bin) ? (isExecutable(bin) ? bin : null) : which(bin, env);
+  return exe ? { exe, args } : null;
+}
+
+/**
+ * Throws unless the tool is a bare executable plus literal arguments.
+ * Exported because every external program this CLI runs — distillers, and the markdown
+ * renderers `view` pipes to — has to clear the same bar before it is spawned.
+ */
+export function assertDeclarative(adapter) {
   const argv = adapter?.argv;
   if (!Array.isArray(argv) || argv.length === 0) {
     throw new Error(`adapter ${adapter?.id ?? '?'} has no argv`);
@@ -313,9 +327,9 @@ export async function distill(adapter, input) {
     throw new Error('journal is too large to distill; trim it and try again');
   }
 
-  const [bin, ...args] = adapter.argv;
-  const exe = isAbsolute(bin) ? (isExecutable(bin) ? bin : null) : which(bin, env);
-  if (!exe) throw new Error(`adapter ${adapter.id} is not installed: ${bin} not found on PATH`);
+  const resolved = resolveArgv(adapter, env);
+  if (!resolved) throw new Error(`adapter ${adapter.id} is not installed: ${adapter.argv[0]} not found on PATH`);
+  const { exe, args } = resolved;
 
   const spawnEnv = childEnv(adapter, env, input?.adapterEnv);
   const raw = await new Promise((resolve, reject) => {

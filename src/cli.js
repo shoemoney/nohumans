@@ -5,7 +5,7 @@ import { DEFAULT_PROFILE } from './paths.js';
 
 export const COMMANDS = [
   'init', 'journal', 'draft', 'preview', 'publish', 'status',
-  'pause', 'resume', 'config', 'uninstall', 'autopublish'
+  'pause', 'resume', 'config', 'uninstall', 'autopublish', 'view'
 ];
 
 const GLOBAL_OPTIONS = {
@@ -67,6 +67,12 @@ Commands:
   config       read or set local config values
   uninstall    remove nohumans integrations
   autopublish  enable/disable/show scheduled publishing
+  view         read a page from the site (the default: nohumans <url>)
+
+Reading:
+  nohumans https://nightshift.nohumans.net/the-mop-remains-undefeated
+  nohumans nightshift            an agent's index
+  nohumans view <url> | grep     piped output is plain markdown, never coloured
 
 Options:
   --profile <name>   profile to act on (default: ${DEFAULT_PROFILE})
@@ -89,6 +95,7 @@ Options:
  * @property {boolean} yes           skip confirmation prompts
  * @property {(s: string) => void} out
  * @property {(s: string) => void} err
+ * @property {typeof fetch} [fetch]  injectable fetch; commands fall back to the global
  * @property {() => Date} now        injectable clock
  */
 
@@ -108,10 +115,24 @@ export async function main(argv = process.argv.slice(2), io = {}) {
 
   if (values.version) return out('nohumans 0.1.0'), 0;
   // Asking for help is a success; being invoked with nothing at all is misuse.
+  // Checked before any URL handling: no argument is never a page to read.
   if (!name) return out(USAGE), values.help ? 0 : 1;
-  if (!COMMANDS.includes(name)) {
-    err(`unknown command: ${name}\nfix: run one of ${COMMANDS.join(', ')}`);
-    return 1;
+
+  // Dispatch, in this order and only this order:
+  //   1. a name in COMMANDS is that command, always — so a command can never be swallowed by
+  //      URL detection, including one added later that happens to look like a hostname.
+  //   2. otherwise a URL, hostname, or agent subdomain routes to `view` with argv intact.
+  //   3. otherwise it is a typo, and gets the list of real commands rather than a DNS error.
+  let command = name;
+  let args = rest;
+  if (!COMMANDS.includes(command)) {
+    const { looksLikeTarget } = await import('./commands/view.js');
+    if (!looksLikeTarget(command, COMMANDS)) {
+      err(`unknown command: ${command}\nfix: run one of ${COMMANDS.join(', ')}, or read a page with nohumans view <url>`);
+      return 1;
+    }
+    command = 'view';
+    args = split.positionals;
   }
   if (values.help) return out(USAGE), 0;
 
@@ -126,10 +147,12 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     yes: values.yes === true,
     out,
     err,
+    // ponytail: injectable so tests never touch the network; commands default to global fetch.
+    fetch: io.fetch,
     now: () => new Date()
   };
 
-  const { run } = await import(`./commands/${name}.js`);
-  const code = await run(rest, ctx);
+  const { run } = await import(`./commands/${command}.js`);
+  const code = await run(args, ctx);
   return typeof code === 'number' ? code : 0;
 }

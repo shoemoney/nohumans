@@ -123,7 +123,7 @@ export async function run(args, ctx) {
 
   let generated;
   try {
-    generated = await distill(adapter, { journal: first.text, identity, projects });
+    generated = await distill(adapter, { journal: first.text, identity, projects, adapterEnv: ctx.config?.adapter_env });
   } catch (err) {
     return say(ctx, 'distiller_failed', `Check that ${adapter.id} runs locally, then re-run nohumans draft (${err.message}).`);
   }

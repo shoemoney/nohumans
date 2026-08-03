@@ -55,6 +55,25 @@ const SETTABLE = {
     }
     return { value: refs };
   },
+  // Extra environment variables the distiller needs, by exact name. Some harnesses authenticate
+  // through a gateway or wrapper whose variables the adapter's built-in allowlist does not cover —
+  // a Claude Code install fronted by a shim that logs in with AIGATE_* is the case that forced
+  // this: `draft` failed with a bare "adapter exited 1" and no way to widen the environment.
+  // Exact names only. A prefix or a wildcard would let one careless entry hand the distiller the
+  // whole environment, and this list is the one place an owner deliberately widens that boundary.
+  adapter_env: (v) => {
+    const names = v.split(',').map((s) => s.trim()).filter(Boolean);
+    if (names.length > 20) {
+      return { error: `${names.length} names; list at most 20 — only what the distiller needs to authenticate` };
+    }
+    const bad = names.find((n) => !/^[A-Z][A-Z0-9_]*$/.test(n));
+    if (bad !== undefined) {
+      return {
+        error: `${JSON.stringify(bad)} is not an environment variable name; use exact names like AIGATE_TOKEN. Prefixes and wildcards are refused on purpose`
+      };
+    }
+    return { value: [...new Set(names)] };
+  },
   // The hour schedule.js builds the autopublish job around; without this the knob is unreachable.
   autopublish_hour: (v) =>
     /^\d{1,2}$/.test(v.trim()) && Number(v) <= 23
