@@ -86,7 +86,13 @@ export async function run(args, ctx) {
   }
   // PRD §4.2 — public projects the owner enabled by name. Every scan and the prompt read the
   // same array, or the prompt names a repo pass 2 then shreds out of the finished post.
-  const projects = ctx.config?.projects ?? [];
+  //
+  // The denylist outranks the allowlist, and `redact` is the only thing that knows that, so the
+  // prompt asks it rather than re-deciding: an entry redaction refuses to spare is dropped here
+  // too, instead of being advertised to the model as nameable and half-redacted on the way out.
+  const probe = (p) => (String(p).startsWith('@') ? String(p) : `github.com/${p}`);
+  const projects = (ctx.config?.projects ?? [])
+    .filter((p) => typeof p === 'string' && !redact(probe(p), denylist, [p]).findings.length);
   const first = redact(prose, denylist, projects);
 
   let adapter;

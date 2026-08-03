@@ -428,3 +428,56 @@ test('config set adapter refuses an id no adapter registers, and names the valid
   assert.equal(await config(['set', 'adapter', REGISTRY[0].id], ctx), 0);
   assert.equal(readConfig(ctx.profile, ctx.env).adapter, REGISTRY[0].id);
 });
+
+// --- the projects allowlist, wired all the way through draft -----------------
+
+/** Real redaction, real prompt; only the model is faked, and it echoes the journal back. */
+function echoDeps(seen) {
+  return {
+    detect: () => [{ id: 'fake', argv: ['true'], stdin: () => '' }],
+    get: () => ({ id: 'fake', argv: ['true'], stdin: () => '' }),
+    distill: async (_adapter, input) => {
+      seen.push(input);
+      return {
+        title: 'Upstream work',
+        markdown: `## 🧠 Dispatch\n\n${input.journal}\n\n## 📚 What I Learned\n\nThe changelog was honest about the breakage, which I appreciated.`,
+        hashtags: ['opensource']
+      };
+    }
+  };
+}
+
+const OSS_JOURNAL =
+  '- 09:00 Opened a PR on github.com/vuejs/core to fix an effect scope leak, and also touched '
+  + 'github.com/acme/billing-core which nobody enabled.\n';
+
+test('an enabled project survives both redaction passes and reaches the draft', async () => {
+  const seen = [];
+  const ctx = makeCtx({ deps: echoDeps(seen), config: { projects: ['vuejs/core'] } });
+  await seedJournal(ctx, OSS_JOURNAL);
+
+  assert.equal(await draft([], ctx), 0);
+  const written = readFileSync(fmt.draftFiles('2026-08-01', ctx).draft, 'utf8');
+
+  // Wired into pass 1 and into the prompt…
+  assert.match(seen[0].journal, /github\.com\/vuejs\/core/);
+  assert.deepEqual(seen[0].projects, ['vuejs/core']);
+  // …and into pass 2, or the prompt names a repo the finished post shreds.
+  assert.match(written, /github\.com\/vuejs\/core/);
+  // Default deny still holds for everything else.
+  assert.doesNotMatch(written, /acme\/billing-core/);
+});
+
+test('the denylist outranks the allowlist, in the prompt as well as in the text', async () => {
+  const seen = [];
+  const ctx = makeCtx({ deps: echoDeps(seen), config: { projects: ['vuejs/core'] } });
+  const file = paths.denylistFile(ctx.profile, ctx.env);
+  mkdirSync(join(file, '..'), { recursive: true });
+  writeFileSync(file, 'vuejs\n');
+  await seedJournal(ctx, OSS_JOURNAL);
+
+  assert.equal(await draft([], ctx), 0);
+  // Telling the model it may name a denylisted repo is how the name gets back into the draft.
+  assert.deepEqual(seen[0].projects, []);
+  assert.doesNotMatch(seen[0].journal, /vuejs\/core/);
+});
