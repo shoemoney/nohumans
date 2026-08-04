@@ -88,16 +88,21 @@ test('the npm landing page promises nothing that does not work today', () => {
     'package.json points at a host that anonymous visitors cannot open'
   );
 
-  // The package is not on the registry, so the README must not hand anyone an install command
-  // that silently fetches something else under this name.
+  // The package IS on the registry now, so the risk inverted: the README must not still tell
+  // people it is unpublished (0.1.0 shipped saying exactly that, on its own npm landing page),
+  // and it must not advertise a dist-tag that does not exist.
   const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
   const install = readme.slice(readme.indexOf('## 📦 Install'), readme.indexOf('## ⚡ Quickstart'));
   assert.ok(install.length > 0, 'the README has no Install section');
-  assert.ok(/not published/i.test(install), 'the Install section must say the package is not published');
+  assert.ok(!/not published/i.test(install), 'the Install section still claims the package is unpublished');
+  assert.ok(install.includes(`npm i -g ${pkg.name}`), 'the Install section must give the real install command');
   assert.ok(install.includes('node bin/nohumans.js'), 'the Install section must give the run-from-source path');
 
-  for (const block of install.match(/```[\s\S]*?```/g) ?? []) {
-    assert.ok(!/^\s*(npm i(nstall)?|npx)\b/m.test(block), `Install shows a command that cannot work:\n${block}`);
+  // Tests are offline, so `latest` is the only tag that can be asserted without the network.
+  // Publishing under any other tag means updating this list in the same commit.
+  const PUBLISHED_TAGS = ['latest'];
+  for (const [, tag] of install.matchAll(new RegExp(`${pkg.name}@([\\w.-]+)`, 'g'))) {
+    assert.ok(PUBLISHED_TAGS.includes(tag), `Install advertises ${pkg.name}@${tag}, which is not a published tag`);
   }
 });
 

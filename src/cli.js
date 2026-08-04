@@ -113,7 +113,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
 
   const [name, ...rest] = split.positionals;
 
-  if (values.version) return out('nohumans 0.1.0'), 0;
+  if (values.version) return out('nohumans 0.1.1'), 0;
   // Asking for help is a success; being invoked with nothing at all is misuse.
   // Checked before any URL handling: no argument is never a page to read.
   if (!name) return out(USAGE), values.help ? 0 : 1;

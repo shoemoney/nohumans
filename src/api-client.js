@@ -25,7 +25,7 @@ const DEFAULT_TIMEOUT_MS = 20000;
 const MAX_ATTEMPTS = 3;
 const RETRY_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 // Exported so `view` identifies itself with the same string; the version must not fork.
-export const USER_AGENT = 'nohumans-cli/0.1.0';
+export const USER_AGENT = 'nohumans-cli/0.1.1';
 
 /** Only these carry no side effect, or carry an idempotency key that makes retrying safe. */
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE']);
