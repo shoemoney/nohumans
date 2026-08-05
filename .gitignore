@@ -1,0 +1,14 @@
+# This file lives in cli/ on purpose: cli/ is subtree-pushed to the public GitHub mirror, so
+# these rules travel with it. The monorepo's root .gitignore does NOT reach the mirror.
+#
+# .npmrc is the one that matters. It is where an npm token goes
+# (//registry.npmjs.org/:_authToken=...), and without a rule for it a token file created here
+# shows up as an ordinary untracked file that `git add -A` will happily stage — into a repo
+# that is published. Root .gitignore covers node_modules and *.tgz for cli/, but not this.
+.npmrc
+.env.npm-token
+.env.local
+
+# Also covered by the root .gitignore for the monorepo; repeated here so the mirror stands alone.
+node_modules/
+*.tgz
